@@ -73,8 +73,7 @@ public class LuaModdingEnvironment implements ModInitializer {
 					try {
 						WatchKey key = watcher.take();
 						for (WatchEvent<?> event : key.pollEvents()) {
-							WatchEvent.Kind<?> kind = event.kind();
-							Path changed = (Path) event.context();
+                            Path changed = (Path) event.context();
 							if (changed.toString().endsWith(".lua")) {
 								LOGGER.info("Lua mod changed: {} - Reloading mods...", changed);
 								// CLEAR Lua state and reload mods!
