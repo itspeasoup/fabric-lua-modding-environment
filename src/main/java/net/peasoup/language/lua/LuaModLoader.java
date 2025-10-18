@@ -120,7 +120,7 @@ public class LuaModLoader {
 
         for (LuaModContainer mod : loadedMods.values()) {
             if (mod.hasDatagen()) {
-                mod.generateData(pack);
+                mod.generateData();
             }
         }
     }

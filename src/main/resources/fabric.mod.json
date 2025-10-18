@@ -12,26 +12,16 @@
 		"sources": "https://fabricmc.net/develop/template/"
 	},
 	"license": "CC0-1.0",
-	"icon": "assets/lua-modding-environment/icon.png",
+	"icon": "assets.lua-modding-environment/icon.png",
 	"environment": "*",
 	"entrypoints": {
 		"main": [
 			"net.peasoup.language.lua.LuaModdingEnvironment"
 		],
-		"client": [
-			"net.peasoup.language.lua.LuaModdingEnvironmentClient"
-		],
 		"fabric-datagen": [
 			"net.peasoup.language.lua.LuaModdingEnvironmentDatagen"
 		]
 	},
-	"mixins": [
-		"lua-modding-environment.mixins.json",
-		{
-			"config": "lua-modding-environment.client.mixins.json",
-			"environment": "client"
-		}
-	],
 	"depends": {
 		"fabricloader": ">=0.17.3",
 		"minecraft": "~1.21.6",

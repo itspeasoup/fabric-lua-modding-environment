@@ -1,6 +1,5 @@
 package net.peasoup.language.lua;
 
-import net.fabricmc.fabric.api.datagen.v1.FabricDataGenerator;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.luaj.vm2.*;
@@ -212,9 +211,6 @@ public class LuaModContainer {
                     if (settings.get("fireproof") != LuaValue.NIL && settings.get("fireproof").toboolean()) {
                         itemSettings.fireproof();
                     }
-
-                    // Register the item
-                    net.minecraft.item.Item item = LuaItemRegistry.register(metadata.id, itemName, itemSettings);
 
                     // Copy texture from Lua mod assets to main mod resources
                     copyItemTexture(itemName, outputDir);
@@ -538,7 +534,7 @@ public class LuaModContainer {
         }
     }
 
-    public void generateData(FabricDataGenerator.Pack pack) {
+    public void generateData() {
         if (hasDatagen && modTable != null && modTable.istable()) {
             LuaValue onDatagen = modTable.get("onDatagen");
             if (onDatagen.isfunction()) {
@@ -551,14 +547,6 @@ public class LuaModContainer {
                 }
             }
         }
-    }
-
-    public LuaModMetadata getMetadata() {
-        return metadata;
-    }
-
-    public Path getModPath() {
-        return modPath;
     }
 
     public boolean hasDatagen() {
@@ -762,7 +750,6 @@ public class LuaModContainer {
             public Varargs invoke(Varargs args) {
                 try {
                     String itemName = args.arg(1).tojstring();
-                    LuaTable settings = args.arg(2).checktable();
 
                     // DON'T register the item - just generate assets
                     // Copy texture from Lua mod assets to main mod resources

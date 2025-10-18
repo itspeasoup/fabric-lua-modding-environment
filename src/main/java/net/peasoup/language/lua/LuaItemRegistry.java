@@ -74,12 +74,4 @@ public class LuaItemRegistry {
 
         LOGGER.info("Added item {} to group {}", itemId, groupId);
     }
-
-    public static Item getItem(String itemId) {
-        return REGISTERED_ITEMS.get(itemId);
-    }
-
-    public static Map<String, Item> getAllItems() {
-        return new HashMap<>(REGISTERED_ITEMS);
-    }
 }

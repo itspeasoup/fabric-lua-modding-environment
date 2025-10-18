@@ -170,10 +170,6 @@ public class LuaModdingEnvironment implements ModInitializer {
 		return luaModLoader;
 	}
 
-	public static Globals getGlobals() {
-		return globals;
-	}
-
 	private static void exposeFabricEvents(Globals globals) {
 		try {
 			for (Class<?> clazz : EVENT_CLASSES) {
