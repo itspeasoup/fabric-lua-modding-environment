@@ -30,13 +30,15 @@ public class LuaModLoader {
         
         // Find all lua mod directories and standalone lua files
         try {
-            Files.list(modsPath).forEach(path -> {
-                if (Files.isDirectory(path)) {
-                    loadStructuredMod(path, isDatagen);
-                } else if (path.toString().endsWith(".lua")) {
-                    loadLegacyMod(path);
-                }
-            });
+            try (java.util.stream.Stream<Path> stream = Files.list(modsPath)) {
+                stream.forEach(path -> {
+                    if (Files.isDirectory(path)) {
+                        loadStructuredMod(path, isDatagen);
+                    } else if (path.toString().endsWith(".lua")) {
+                        loadLegacyMod(path);
+                    }
+                });
+            }
         } catch (Exception e) {
             LOGGER.error("Failed to scan mods directory", e);
         }

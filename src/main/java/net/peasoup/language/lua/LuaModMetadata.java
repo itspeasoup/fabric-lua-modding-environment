@@ -2,8 +2,6 @@ package net.peasoup.language.lua;
 
 import com.google.gson.Gson;
 import com.google.gson.annotations.SerializedName;
-import java.util.List;
-import java.util.Map;
 
 public class LuaModMetadata {
     @SerializedName("schema_version")
