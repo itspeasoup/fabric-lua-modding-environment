@@ -1,6 +1,5 @@
 package net.peasoup.language.lua;
 
-import net.fabricmc.fabric.api.datagen.v1.FabricDataGenerator;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.luaj.vm2.*;
@@ -115,7 +114,7 @@ public class LuaModLoader {
         loadAllMods();
     }
     
-    public void generateData(FabricDataGenerator.Pack pack) {
+    public void generateData() {
         loadAllMods(true);
 
         for (LuaModContainer mod : loadedMods.values()) {

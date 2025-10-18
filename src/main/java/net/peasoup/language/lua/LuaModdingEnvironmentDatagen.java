@@ -11,7 +11,7 @@ public class LuaModdingEnvironmentDatagen implements DataGeneratorEntrypoint {
         // Get the Lua mod loader and generate data from all Lua mods that support datagen
         LuaModLoader luaModLoader = LuaModdingEnvironment.getLuaModLoader();
         if (luaModLoader != null) {
-            luaModLoader.generateData(pack);
+            luaModLoader.generateData();
         }
     }
 }

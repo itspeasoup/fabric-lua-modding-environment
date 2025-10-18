@@ -15,9 +15,8 @@ import java.util.List;
 public class LuaModdingEnvironment implements ModInitializer {
 	private static final Logger LOGGER = LogManager.getLogger("lua-modding-environment");
 	private static LuaModLoader luaModLoader;
-	private static Globals globals;
 
-	// List all known event classes to search for static fields
+    // List all known event classes to search for static fields
 	private static final List<Class<?>> EVENT_CLASSES = Arrays.asList(
 			net.fabricmc.fabric.api.event.lifecycle.v1.CommonLifecycleEvents.class,
 			net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.class,
@@ -98,7 +97,7 @@ public class LuaModdingEnvironment implements ModInitializer {
 
 	@Override
 	public void onInitialize() {
-		globals = JsePlatform.standardGlobals();
+        Globals globals = JsePlatform.standardGlobals();
 
 		// redirect print
 		globals.set("print", new VarArgFunction() {

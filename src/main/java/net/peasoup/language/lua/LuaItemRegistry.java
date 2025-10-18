@@ -37,10 +37,6 @@ public class LuaItemRegistry {
         return item;
     }
 
-    public static Item register(String namespace, String name, Item.Settings settings) {
-        return register(namespace, name, Item::new, settings);
-    }
-
     public static void addToItemGroup(String itemId, String groupId) {
         Item item = REGISTERED_ITEMS.get(itemId);
         if (item == null) {
