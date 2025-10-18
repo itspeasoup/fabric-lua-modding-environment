@@ -24,6 +24,27 @@ loom {
 		}
 	}
 
+	runs {
+		datagen {
+			inherit server
+			name "Data Generation"
+			vmArg "-Dfabric-api.datagen"
+			vmArg "-Dfabric-api.datagen.output-dir=${file("src/main/generated")}"
+			vmArg "-Dfabric-api.datagen.modid=lua-modding-environment"
+
+			runDir "build/datagen"
+		}
+	}
+}
+
+sourceSets {
+	main {
+		resources {
+			srcDirs += [
+				'src/main/generated'
+			]
+		}
+	}
 }
 
 def LUAJ_VERSION = "3.0.1"
@@ -37,8 +58,15 @@ dependencies {
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
+	// Add datagen API
+	modImplementation "net.fabricmc.fabric-api:fabric-data-generation-api-v1:${project.fabric_version}"
+
 	implementation "org.luaj:luaj-jse:$LUAJ_VERSION"
 	modImplementation(include("org.luaj:luaj-jse:$LUAJ_VERSION"))
+
+	// Add Gson for JSON parsing
+	implementation "com.google.code.gson:gson:2.10.1"
+	include "com.google.code.gson:gson:2.10.1"
 }
 
 processResources {

@@ -20,6 +20,9 @@
 		],
 		"client": [
 			"net.peasoup.language.lua.LuaModdingEnvironmentClient"
+		],
+		"fabric-datagen": [
+			"net.peasoup.language.lua.LuaModdingEnvironmentDatagen"
 		]
 	},
 	"mixins": [

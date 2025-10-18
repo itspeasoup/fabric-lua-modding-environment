@@ -7,14 +7,15 @@ import org.luaj.vm2.*;
 import org.luaj.vm2.lib.VarArgFunction;
 import org.luaj.vm2.lib.jse.JsePlatform;
 
-import java.io.File;
-import java.io.FileReader;
 import java.lang.reflect.Field;
 import java.nio.file.*;
-import java.util.*;
+import java.util.Arrays;
+import java.util.List;
 
 public class LuaModdingEnvironment implements ModInitializer {
 	private static final Logger LOGGER = LogManager.getLogger("lua-modding-environment");
+	private static LuaModLoader luaModLoader;
+	private static Globals globals;
 
 	// List all known event classes to search for static fields
 	private static final List<Class<?>> EVENT_CLASSES = Arrays.asList(
@@ -32,9 +33,72 @@ public class LuaModdingEnvironment implements ModInitializer {
 			net.fabricmc.fabric.api.event.player.AttackEntityCallback.class
 	);
 
+	// Static initializer - runs BEFORE mod initialization
+	static {
+		LOGGER.info("Pre-generating Lua mod assets before resource loading...");
+		try {
+			preGenerateAssets();
+		} catch (Exception e) {
+			LOGGER.error("Failed to pre-generate assets", e);
+		}
+	}
+
+	private static void preGenerateAssets() throws Exception {
+		// Create globals for pre-generation
+		Globals preGenGlobals = JsePlatform.standardGlobals();
+
+		// Redirect print
+		preGenGlobals.set("print", new VarArgFunction() {
+			@Override
+			public Varargs invoke(Varargs args) {
+				StringBuilder sb = new StringBuilder();
+				for (int i = 1; i <= args.narg(); i++) {
+					if (i > 1) sb.append(" ");
+					sb.append(args.arg(i).tojstring());
+				}
+				LOGGER.info("[Lua pre-gen] {}", sb.toString());
+				return LuaValue.NIL;
+			}
+		});
+
+		// Load mods in datagen mode to generate assets
+		Path modsPath = Path.of("mods");
+		if (!Files.exists(modsPath)) {
+			LOGGER.warn("Mods directory not found at startup: {}", modsPath.toAbsolutePath());
+			return;
+		}
+
+		try (var stream = Files.list(modsPath)) {
+			stream.forEach(path -> {
+				if (Files.isDirectory(path)) {
+					Path metadataPath = path.resolve("lua_mod.json");
+					if (!Files.exists(metadataPath)) {
+						return;
+					}
+
+					try {
+						String metadataJson = Files.readString(metadataPath);
+						LuaModMetadata metadata = LuaModMetadata.fromJson(metadataJson);
+
+						if (metadata.datagen != null && metadata.datagen.enabled) {
+							LOGGER.info("Pre-generating assets for mod: {}", metadata.id);
+							LuaModContainer container = new LuaModContainer(metadata, path, preGenGlobals);
+							// Only generate asset files, DON'T register items yet
+							container.generateAssetsOnly();
+						}
+					} catch (Exception e) {
+						LOGGER.error("Failed to pre-generate assets for {}", path, e);
+					}
+				}
+			});
+		}
+
+		LOGGER.info("Pre-generation complete - assets are ready for resource loading");
+	}
+
 	@Override
 	public void onInitialize() {
-		Globals globals = JsePlatform.standardGlobals();
+		globals = JsePlatform.standardGlobals();
 
 		// redirect print
 		globals.set("print", new VarArgFunction() {
@@ -57,16 +121,26 @@ public class LuaModdingEnvironment implements ModInitializer {
 		globals.set("register_event", LuaEventBridge.getRegisterEventFunction());
 		globals.set("describe_class", LuaEventBridge.getDescribeFunction());
 
-		// load lua mods
-		loadLuaMods(globals);
-		startLuaModWatcher(globals); // <-- Add this
+		// Initialize the new Lua mod loader
+		luaModLoader = new LuaModLoader(globals);
+		luaModLoader.loadAllMods();
+
+		// Start file watcher for hot reloading
+		startLuaModWatcher();
 	}
 
-	private void startLuaModWatcher(Globals globals) {
-		Path modsPath = Paths.get("mods");
+	private void startLuaModWatcher() {
+		Path modsPath = Paths.get("run/mods");
 		try {
+			// Ensure the directory exists before watching
+			if (!Files.exists(modsPath)) {
+				Files.createDirectories(modsPath);
+			}
 			WatchService watcher = modsPath.getFileSystem().newWatchService();
-			modsPath.register(watcher, StandardWatchEventKinds.ENTRY_MODIFY, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_DELETE);
+			modsPath.register(watcher,
+				StandardWatchEventKinds.ENTRY_MODIFY,
+				StandardWatchEventKinds.ENTRY_CREATE,
+				StandardWatchEventKinds.ENTRY_DELETE);
 
 			Thread watcherThread = new Thread(() -> {
 				while (true) {
@@ -74,10 +148,9 @@ public class LuaModdingEnvironment implements ModInitializer {
 						WatchKey key = watcher.take();
 						for (WatchEvent<?> event : key.pollEvents()) {
                             Path changed = (Path) event.context();
-							if (changed.toString().endsWith(".lua")) {
-								LOGGER.info("Lua mod changed: {} - Reloading mods...", changed);
-								// CLEAR Lua state and reload mods!
-								reloadLuaMods(globals);
+							if (changed.toString().endsWith(".lua") || changed.toString().equals("lua_mod.json")) {
+								LOGGER.info("Lua mod file changed: {} - Reloading mods...", changed);
+								luaModLoader.reloadAllMods();
 							}
 						}
 						key.reset();
@@ -93,44 +166,12 @@ public class LuaModdingEnvironment implements ModInitializer {
 		}
 	}
 
-	public static void reloadLuaMods(Globals globals) {
-		// 1. Clear all Lua event handlers
-		net.peasoup.language.lua.LuaEventBridge.clearAllHandlers();
+	public static LuaModLoader getLuaModLoader() {
+		return luaModLoader;
+	}
 
-		// 2. Re-expose Fabric events (in case globals changed)
-		exposeFabricEvents(globals);
-
-		// 3. Re-register bridge functions
-		globals.set("register_event", net.peasoup.language.lua.LuaEventBridge.getRegisterEventFunction());
-		globals.set("describe_class", net.peasoup.language.lua.LuaEventBridge.getDescribeFunction());
-
-		// 4. Reload all Lua mods
-		File modsFolder = new File("mods");
-		if (!modsFolder.exists() || !modsFolder.isDirectory()) {
-			LOGGER.warn("mods folder not found!");
-			return;
-		}
-
-		File[] files = modsFolder.listFiles((d, n) -> n.endsWith(".lua"));
-		if (files == null) return;
-
-		for (File luaFile : files) {
-			try {
-				LOGGER.info("reloading lua mod: {}", luaFile.getName());
-				globals.load(new FileReader(luaFile), luaFile.getName()).call();
-
-				LuaValue modTable = globals.get("mod");
-				if (modTable.istable()) {
-					LuaValue onInit = modTable.get("onInitialize");
-					if (onInit.isfunction()) {
-						LOGGER.info("calling onInitialize for {}", luaFile.getName());
-						onInit.call();
-					}
-				}
-			} catch (Exception e) {
-				LOGGER.error("failed to reload lua mod: {}", luaFile.getName(), e);
-			}
-		}
+	public static Globals getGlobals() {
+		return globals;
 	}
 
 	private static void exposeFabricEvents(Globals globals) {
@@ -150,35 +191,6 @@ public class LuaModdingEnvironment implements ModInitializer {
 			}
 		} catch (Exception e) {
 			LOGGER.error("error exposing fabric events", e);
-		}
-	}
-
-	private static void loadLuaMods(Globals globals) {
-		File modsFolder = new File("mods");
-		if (!modsFolder.exists() || !modsFolder.isDirectory()) {
-			LOGGER.warn("mods folder not found!");
-			return;
-		}
-
-		File[] files = modsFolder.listFiles((d, n) -> n.endsWith(".lua"));
-		if (files == null) return;
-
-		for (File luaFile : files) {
-			try {
-				LOGGER.info("loading lua mod: {}", luaFile.getName());
-				globals.load(new FileReader(luaFile), luaFile.getName()).call();
-
-				LuaValue modTable = globals.get("mod");
-				if (modTable.istable()) {
-					LuaValue onInit = modTable.get("onInitialize");
-					if (onInit.isfunction()) {
-						LOGGER.info("calling onInitialize for {}", luaFile.getName());
-						onInit.call();
-					}
-				}
-			} catch (Exception e) {
-				LOGGER.error("failed to load lua mod: {}", luaFile.getName(), e);
-			}
 		}
 	}
 }
