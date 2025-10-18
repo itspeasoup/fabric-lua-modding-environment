@@ -19,6 +19,28 @@ public class LuaItemRegistry {
     private static final Logger LOGGER = LogManager.getLogger("lua-item-registry");
     private static final Map<String, Item> REGISTERED_ITEMS = new HashMap<>();
 
+    public static Item register(String namespace, String name, Function<Item.Settings, Item> itemFactory, Item.Settings settings) {
+        // Create the item key
+        RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, Identifier.of(namespace, name));
+
+        // Create the item instance
+        Item item = itemFactory.apply(settings.registryKey(itemKey));
+
+        // Register the item
+        Registry.register(Registries.ITEM, itemKey, item);
+
+        // Store for later reference
+        String fullId = namespace + ":" + name;
+        REGISTERED_ITEMS.put(fullId, item);
+
+        LOGGER.info("Registered Lua item: {}", fullId);
+        return item;
+    }
+
+    public static Item register(String namespace, String name, Item.Settings settings) {
+        return register(namespace, name, Item::new, settings);
+    }
+
     public static void addToItemGroup(String itemId, String groupId) {
         Item item = REGISTERED_ITEMS.get(itemId);
         if (item == null) {
@@ -51,5 +73,9 @@ public class LuaItemRegistry {
         }
 
         LOGGER.info("Added item {} to group {}", itemId, groupId);
+    }
+
+    public static Map<String, Item> getAllItems() {
+        return new HashMap<>(REGISTERED_ITEMS);
     }
 }
