@@ -18,13 +18,19 @@
 		"main": [
 			"net.peasoup.language.lua.LuaModdingEnvironment"
 		],
+		"client": [
+			"net.peasoup.language.lua.client.LuaModdingEnvironmentClient"
+		],
 		"fabric-datagen": [
 			"net.peasoup.language.lua.LuaModdingEnvironmentDatagen"
 		]
 	},
+	"mixins": [
+		"lua-modding-environment.mixins.json"
+	],
 	"depends": {
 		"fabricloader": ">=0.17.3",
-		"minecraft": "~1.21.6",
+		"minecraft": "~1.21.4",
 		"java": ">=21",
 		"fabric-api": "*"
 	},

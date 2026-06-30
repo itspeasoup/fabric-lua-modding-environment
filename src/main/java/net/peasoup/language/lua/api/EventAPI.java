@@ -24,16 +24,6 @@ public class EventAPI {
     // Event name -> Event object mapping
     private static final Map<String, EventInfo> EVENT_REGISTRY = new HashMap<>();
 
-    private static class EventInfo {
-        final Event<?> event;
-        final Class<?> callbackType;
-
-        EventInfo(Event<?> event, Class<?> callbackType) {
-            this.event = event;
-            this.callbackType = callbackType;
-        }
-    }
-
     /**
      * Register all known Fabric events
      */
@@ -85,11 +75,22 @@ public class EventAPI {
     }
 
     /**
+     * Clear all handlers (for hot reloading)
+     */
+    public static void clearAllHandlers() {
+        EVENT_HANDLERS.clear();
+        LOGGER.info("Cleared all Lua event handlers");
+        // Note: We don't unhook events, they remain hooked
+    }
+
+    /**
      * Install this API into a Lua globals table
      */
     public void install(Globals globals) {
-        // events.register(event_name, handler_function)
-        globals.set("register_event", new TwoArgFunction() {
+        LuaTable events = new LuaTable();
+
+        // events.on(event_name, handler_function)
+        events.set("on", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue eventName, LuaValue handler) {
                 if (!eventName.isstring()) {
@@ -105,7 +106,7 @@ public class EventAPI {
         });
 
         // Helper to list available events
-        globals.set("list_events", new org.luaj.vm2.lib.ZeroArgFunction() {
+        events.set("list", new org.luaj.vm2.lib.ZeroArgFunction() {
             @Override
             public LuaValue call() {
                 LuaTable events = new LuaTable();
@@ -116,12 +117,14 @@ public class EventAPI {
                 return events;
             }
         });
+
+        globals.set("events", events);
     }
 
     private void registerEventHandler(String eventName, LuaFunction handler) {
         EventInfo eventInfo = EVENT_REGISTRY.get(eventName);
         if (eventInfo == null) {
-            LOGGER.warn("Unknown event: {}. Use list_events() to see available events.", eventName);
+            LOGGER.warn("unknown event: {}. use list_events() to see available events.", eventName);
             return;
         }
 
@@ -134,40 +137,42 @@ public class EventAPI {
             HOOKED_EVENTS.add(eventInfo.event);
         }
 
-        LOGGER.info("Registered Lua handler for event: {}", eventName);
+        LOGGER.info("registered Lua handler for event: {}", eventName);
     }
 
     private void hookEvent(Event<?> event, Class<?> callbackType) {
         try {
             // Create a dynamic proxy that forwards to our Lua handlers
-            Object proxy = Proxy.newProxyInstance(
-                    callbackType.getClassLoader(),
-                    new Class[]{callbackType},
-                    (proxyObj, method, args) -> {
-                        fireEvent(event, args == null ? new Object[0] : args);
+            Object proxy = Proxy.newProxyInstance(callbackType.getClassLoader(), new Class<?>[]{callbackType}, (proxy1, method, args1) -> {
+                // 1. Fire the event and get the Lua result
+                Object result = fireEvent(event, args1);
 
-                        // Return appropriate default value
-                        Class<?> returnType = method.getReturnType();
-                        if (returnType == void.class) {
-                            return null;
-                        } else if (returnType.isPrimitive()) {
-                            if (returnType == boolean.class) return false;
-                            if (returnType == int.class) return 0;
-                            if (returnType == long.class) return 0L;
-                            if (returnType == float.class) return 0.0f;
-                            if (returnType == double.class) return 0.0d;
-                            if (returnType == byte.class) return (byte) 0;
-                            if (returnType == short.class) return (short) 0;
-                            if (returnType == char.class) return '\0';
+                // 2. Check if the Minecraft event expects a return value (like ActionResult)
+                Class<?> returnType = method.getReturnType();
+
+                if (returnType != void.class) {
+                    // If the event expects an ActionResult (most interaction events do)
+                    if (returnType.equals(net.minecraft.util.ActionResult.class)) {
+                        if (result instanceof String s) {
+                            return switch (s.toUpperCase()) {
+                                case "SUCCESS" -> net.minecraft.util.ActionResult.SUCCESS;
+                                case "CONSUME" -> net.minecraft.util.ActionResult.CONSUME;
+                                case "FAIL" -> net.minecraft.util.ActionResult.FAIL;
+                                default -> net.minecraft.util.ActionResult.PASS;
+                            };
                         }
-                        return null;
+                        // Default fallback: If Lua didn't return a string, return PASS
+                        return net.minecraft.util.ActionResult.PASS;
                     }
-            );
+                }
+
+                return null; // Only return null if the method is void
+            });
 
             // Find and call the register method
             Method registerMethod = findRegisterMethod(event, callbackType);
             if (registerMethod == null) {
-                LOGGER.warn("Could not find register method for event {}", event);
+                LOGGER.warn("could not find register method for event {}", event);
                 return;
             }
 
@@ -177,21 +182,29 @@ public class EventAPI {
             if (registerMethod.getParameterCount() == 1) {
                 registerMethod.invoke(event, proxy);
             } else if (registerMethod.getParameterCount() == 2) {
-                // Try to create an identifier
+                // Try to create an identifier using Identifier.of() static method
                 Class<?> identifierType = registerMethod.getParameterTypes()[0];
                 try {
-                    Object identifier = identifierType.getConstructor(String.class).newInstance("lua");
+                    // Try the new way first (Identifier.of("namespace", "path"))
+                    Method ofMethod = identifierType.getMethod("of", String.class, String.class);
+                    Object identifier = ofMethod.invoke(null, "lua", "event_handler");
                     registerMethod.invoke(event, identifier, proxy);
-                } catch (Exception e) {
-                    LOGGER.warn("Failed to create identifier for event registration", e);
-                    return;
+                } catch (NoSuchMethodException e) {
+                    // Fall back to old constructor if the static method doesn't exist
+                    try {
+                        Object identifier = identifierType.getConstructor(String.class).newInstance("lua");
+                        registerMethod.invoke(event, identifier, proxy);
+                    } catch (Exception ex) {
+                        LOGGER.warn("failed to create identifier for event registration", ex);
+                        return;
+                    }
                 }
             }
 
-            LOGGER.info("Hooked Fabric event: {}", event.getClass().getSimpleName());
+            LOGGER.info("hooked Fabric event: {}", event.getClass().getSimpleName());
 
         } catch (Exception e) {
-            LOGGER.error("Failed to hook event {}", event, e);
+            LOGGER.error("failed to hook event {}", event, e);
         }
     }
 
@@ -209,25 +222,27 @@ public class EventAPI {
         return null;
     }
 
-    private void fireEvent(Event<?> event, Object[] args) {
+    private Object fireEvent(Event<?> event, Object[] args) {
         List<LuaFunction> handlers = EVENT_HANDLERS.get(event);
-        if (handlers == null) return;
+        if (handlers == null) return null;
 
+        Object lastResult = null;
         for (LuaFunction handler : handlers) {
             try {
-                LuaBridge.safeCall(handler, args);
+                // Capture the return value from Lua
+                LuaValue result = LuaBridge.safeCall(handler, args);
+
+                // If Lua returned something (like "PASS" or "SUCCESS"), save it
+                if (result != null && !result.isnil()) {
+                    lastResult = result.tojstring();
+                }
             } catch (Exception e) {
-                LOGGER.error("Error in Lua event handler: {}", e.getMessage(), e);
+                LOGGER.error("error in Lua event handler: {}", e.getMessage(), e);
             }
         }
+        return lastResult;
     }
 
-    /**
-     * Clear all handlers (for hot reloading)
-     */
-    public static void clearAllHandlers() {
-        EVENT_HANDLERS.clear();
-        LOGGER.info("Cleared all Lua event handlers");
-        // Note: We don't unhook events, they remain hooked
+    private record EventInfo(Event<?> event, Class<?> callbackType) {
     }
 }
