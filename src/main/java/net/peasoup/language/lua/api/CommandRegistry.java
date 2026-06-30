@@ -1,4 +1,4 @@
 package net.peasoup.language.lua;
 
-public class LuaModdingEnvironment {
+public class CommandRegistry {
 }
