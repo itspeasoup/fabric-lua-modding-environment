@@ -1,5 +1,9 @@
 package net.peasoup.language.lua;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import net.fabricmc.loader.api.FabricLoader;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.luaj.vm2.*;
@@ -11,18 +15,20 @@ import java.nio.file.Path;
 
 public class LuaModContainer {
     private static final Logger LOGGER = LogManager.getLogger("lua-mod-container");
+    private static final Gson GSON = new Gson();
 
     private final LuaModMetadata metadata;
     private final Path modPath;
-    private final Globals globals;
+    private final Globals parentGlobals;
+    private Globals modGlobals;  // Per-mod isolated globals
     private LuaValue modTable;
     boolean hasDatagen = false;
     private final java.util.Map<String, String> itemTranslations = new java.util.HashMap<>();
 
-    public LuaModContainer(LuaModMetadata metadata, Path modPath, Globals globals) {
+    public LuaModContainer(LuaModMetadata metadata, Path modPath, Globals parentGlobals) {
         this.metadata = metadata;
         this.modPath = modPath;
-        this.globals = globals;
+        this.parentGlobals = parentGlobals;
     }
 
     public void loadMainScript() throws Exception {
@@ -31,22 +37,23 @@ public class LuaModContainer {
             throw new Exception("Main script not found: " + mainScript);
         }
 
-        // Create mod-specific globals with mod info
-        setupModGlobals();
+        // Create mod-specific isolated globals
+        createModGlobals();
 
         // Load and execute the main script
-        globals.load(new FileReader(mainScript.toFile()), metadata.id + ":" + metadata.mainScript).call();
+        modGlobals.load(new FileReader(mainScript.toFile()), metadata.id + ":" + metadata.mainScript).call();
 
         // Get the mod table if it exists
-        modTable = globals.get("mod");
+        modTable = modGlobals.get("mod");
 
         LOGGER.info("Loaded main script for mod: {}", metadata.id);
     }
 
     public void loadLegacyScript(Path luaFile) throws Exception {
-        // For legacy mods, just load the file directly
-        globals.load(new FileReader(luaFile.toFile()), luaFile.getFileName().toString()).call();
-        modTable = globals.get("mod");
+        // For legacy mods, create isolated globals
+        createModGlobals();
+        modGlobals.load(new FileReader(luaFile.toFile()), luaFile.getFileName().toString()).call();
+        modTable = modGlobals.get("mod");
         LOGGER.info("Loaded legacy script: {}", luaFile.getFileName());
     }
 
@@ -61,13 +68,26 @@ public class LuaModContainer {
             return;
         }
 
-        setupModGlobals();
+        createModGlobals();
         setupDatagenGlobals();
 
-        globals.load(new FileReader(datagenScript.toFile()), metadata.id + ":datagen").call();
+        modGlobals.load(new FileReader(datagenScript.toFile()), metadata.id + ":datagen").call();
         hasDatagen = true;
 
         LOGGER.info("Loaded datagen script for mod: {}", metadata.id);
+    }
+
+    /**
+     * Create isolated Lua globals for this mod.
+     * Prevents mods from interfering with each other's namespaces.
+     */
+    private void createModGlobals() {
+        if (modGlobals == null) {
+            modGlobals = new Globals();
+            // Copy sandbox-safe libraries from parent
+            modGlobals.load(new org.luaj.vm2.lib.jse.JsePlatform().standardGlobals(), false);
+            setupModGlobals();
+        }
     }
 
     private void setupModGlobals() {
@@ -78,53 +98,114 @@ public class LuaModContainer {
         modInfo.set("version", metadata.version);
         modInfo.set("description", metadata.description);
 
-        globals.set("MOD_INFO", modInfo);
+        modGlobals.set("MOD_INFO", modInfo);
 
         // Add mod-specific resource helper
-        globals.set("mod_resource", new VarArgFunction() {
+        modGlobals.set("mod_resource", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
-                String path = args.arg(1).tojstring();
-                return LuaValue.valueOf(metadata.id + ":" + path);
+                try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("mod_resource requires 1 argument, got {}", args.narg());
+                        return LuaValue.NIL;
+                    }
+                    String path = args.arg(1).tojstring();
+                    return LuaValue.valueOf(metadata.id + ":" + path);
+                } catch (Exception e) {
+                    LOGGER.error("Error in mod_resource: {}", e.getMessage());
+                    return LuaValue.NIL;
+                }
             }
         });
 
         // Add mod path helper
-        globals.set("mod_path", new VarArgFunction() {
+        modGlobals.set("mod_path", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
-                String path = args.arg(1).tojstring();
-                return LuaValue.valueOf(modPath.resolve(path).toString());
+                try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("mod_path requires 1 argument, got {}", args.narg());
+                        return LuaValue.NIL;
+                    }
+                    String path = args.arg(1).tojstring();
+                    return LuaValue.valueOf(modPath.resolve(path).toString());
+                } catch (Exception e) {
+                    LOGGER.error("Error in mod_path: {}", e.getMessage());
+                    return LuaValue.NIL;
+                }
+            }
+        });
+
+        // Redirect print to logger
+        modGlobals.set("print", new VarArgFunction() {
+            @Override
+            public Varargs invoke(Varargs args) {
+                StringBuilder sb = new StringBuilder();
+                for (int i = 1; i <= args.narg(); i++) {
+                    if (i > 1) sb.append(" ");
+                    try {
+                        sb.append(args.arg(i).tojstring());
+                    } catch (Exception e) {
+                        sb.append("<error>");
+                    }
+                }
+                LOGGER.info("[{}] {}", metadata.id, sb.toString());
+                return LuaValue.NIL;
             }
         });
     }
 
     private void setupDatagenGlobals() {
         // Add datagen-specific functions
-        globals.set("add_recipe", new VarArgFunction() {
+        modGlobals.set("add_recipe", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
-                // TODO: Implement recipe generation
-                LOGGER.info("Recipe generation requested from Lua mod: {}", metadata.id);
-                return LuaValue.NIL;
+                try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("[{}] add_recipe requires 1 argument", metadata.id);
+                        return LuaValue.NIL;
+                    }
+                    LuaTable recipe = args.arg(1).checktable();
+                    LOGGER.info("[{}] Recipe generation requested", metadata.id);
+                    return LuaValue.NIL;
+                } catch (Exception e) {
+                    LOGGER.error("[{}] Error in add_recipe: {}", metadata.id, e.getMessage());
+                    return LuaValue.NIL;
+                }
             }
         });
 
-        globals.set("add_loot_table", new VarArgFunction() {
+        modGlobals.set("add_loot_table", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
-                // TODO: Implement loot table generation
-                LOGGER.info("Loot table generation requested from Lua mod: {}", metadata.id);
-                return LuaValue.NIL;
+                try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("[{}] add_loot_table requires 1 argument", metadata.id);
+                        return LuaValue.NIL;
+                    }
+                    LOGGER.info("[{}] Loot table generation requested", metadata.id);
+                    return LuaValue.NIL;
+                } catch (Exception e) {
+                    LOGGER.error("[{}] Error in add_loot_table: {}", metadata.id, e.getMessage());
+                    return LuaValue.NIL;
+                }
             }
         });
 
-        globals.set("add_tag", new VarArgFunction() {
+        modGlobals.set("add_tag", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
-                // TODO: Implement tag generation
-                LOGGER.info("Tag generation requested from Lua mod: {}", metadata.id);
-                return LuaValue.NIL;
+                try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("[{}] add_tag requires 1 argument", metadata.id);
+                        return LuaValue.NIL;
+                    }
+                    LOGGER.info("[{}] Tag generation requested", metadata.id);
+                    return LuaValue.NIL;
+                } catch (Exception e) {
+                    LOGGER.error("[{}] Error in add_tag: {}", metadata.id, e.getMessage());
+                    return LuaValue.NIL;
+                }
             }
         });
     }
@@ -174,10 +255,10 @@ public class LuaModContainer {
         setupModGlobals();
         setupAutoDatagenGlobals(outputDir);
 
-        globals.load(new FileReader(datagenScript.toFile()), metadata.id + ":autodatagen").call();
+        modGlobals.load(new FileReader(datagenScript.toFile()), metadata.id + ":autodatagen").call();
 
         // Call onDatagen if it exists
-        LuaValue datagenModTable = globals.get("mod");
+        LuaValue datagenModTable = modGlobals.get("mod");
         if (datagenModTable != null && datagenModTable.istable()) {
             LuaValue onDatagen = datagenModTable.get("onDatagen");
             if (onDatagen.isfunction()) {
@@ -194,10 +275,15 @@ public class LuaModContainer {
 
     private void setupAutoDatagenGlobals(Path outputDir) {
         // Add actual item registration functions
-        globals.set("register_item", new VarArgFunction() {
+        modGlobals.set("register_item", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 2) {
+                        LOGGER.error("[{}] register_item requires 2 arguments, got {}", metadata.id, args.narg());
+                        return LuaValue.NIL;
+                    }
+
                     String itemName = args.arg(1).tojstring();
                     LuaTable settings = args.arg(2).checktable();
 
@@ -227,69 +313,89 @@ public class LuaModContainer {
                     LOGGER.info("Registered item: {}:{}", metadata.id, itemName);
                     return LuaValue.NIL;
                 } catch (Exception e) {
-                    LOGGER.error("Error registering item for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error registering item: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
         });
 
-        globals.set("add_item_to_group", new VarArgFunction() {
+        modGlobals.set("add_item_to_group", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 2) {
+                        LOGGER.error("[{}] add_item_to_group requires 2 arguments", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     String itemName = args.arg(1).tojstring();
                     String groupName = args.arg(2).tojstring();
 
                     String fullItemId = metadata.id + ":" + itemName;
                     LuaItemRegistry.addToItemGroup(fullItemId, groupName);
 
-                    LOGGER.info("Added item {} to group {}", fullItemId, groupName);
+                    LOGGER.info("[{}] Added item {} to group {}", metadata.id, fullItemId, groupName);
                     return LuaValue.NIL;
                 } catch (Exception e) {
-                    LOGGER.error("Error adding item to group for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error adding item to group: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
         });
 
         // Keep recipe generation for actual recipes (not items)
-        globals.set("add_recipe", new VarArgFunction() {
+        modGlobals.set("add_recipe", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("[{}] add_recipe requires 1 argument", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     LuaTable recipe = args.arg(1).checktable();
                     writeRecipeFile(recipe, outputDir);
                 } catch (Exception e) {
-                    LOGGER.error("Error generating recipe for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error generating recipe: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
         });
 
-        globals.set("add_loot_table", new VarArgFunction() {
+        modGlobals.set("add_loot_table", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 2) {
+                        LOGGER.error("[{}] add_loot_table requires 2 arguments", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     String id = args.arg(1).tojstring();
                     LuaTable lootTable = args.arg(2).checktable();
                     writeLootTableFile(id, lootTable, outputDir);
                 } catch (Exception e) {
-                    LOGGER.error("Error generating loot table for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error generating loot table: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
         });
 
-        globals.set("add_tag", new VarArgFunction() {
+        modGlobals.set("add_tag", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 3) {
+                        LOGGER.error("[{}] add_tag requires 3 arguments", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     String type = args.arg(1).tojstring();
                     String id = args.arg(2).tojstring();
                     LuaTable items = args.arg(3).checktable();
                     writeTagFile(type, id, items, outputDir);
                 } catch (Exception e) {
-                    LOGGER.error("Error generating tag for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error generating tag: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
@@ -301,18 +407,15 @@ public class LuaModContainer {
         Path modelsDir = assetsDir.resolve("models").resolve("item");
         Files.createDirectories(modelsDir);
 
-        // Generate item model JSON
-        String modelJson = String.format("""
-            {
-              "parent": "minecraft:item/generated",
-              "textures": {
-                "layer0": "%s:item/%s"
-              }
-            }
-            """, metadata.id, itemName);
+        // Generate item model JSON using Gson
+        JsonObject model = new JsonObject();
+        model.addProperty("parent", "minecraft:item/generated");
+        JsonObject textures = new JsonObject();
+        textures.addProperty("layer0", metadata.id + ":item/" + itemName);
+        model.add("textures", textures);
 
         Path modelFile = modelsDir.resolve(itemName + ".json");
-        Files.writeString(modelFile, modelJson);
+        Files.writeString(modelFile, GSON.toJson(model));
 
         LOGGER.info("Generated item model at {}", modelFile);
     }
@@ -322,48 +425,56 @@ public class LuaModContainer {
         Path itemsDir = assetsDir.resolve("items");
         Files.createDirectories(itemsDir);
 
-        // Generate item model description JSON
-        String descriptionJson = String.format("""
-            {
-              "model": {
-                "type": "minecraft:model",
-                "model": "%s:item/%s"
-              }
-            }
-            """, metadata.id, itemName);
+        // Generate item model description JSON using Gson
+        JsonObject root = new JsonObject();
+        JsonObject model = new JsonObject();
+        model.addProperty("type", "minecraft:model");
+        model.addProperty("model", metadata.id + ":item/" + itemName);
+        root.add("model", model);
 
         Path descriptionFile = itemsDir.resolve(itemName + ".json");
-        Files.writeString(descriptionFile, descriptionJson);
+        Files.writeString(descriptionFile, GSON.toJson(root));
 
         LOGGER.info("Generated item model description at {}", descriptionFile);
     }
 
     private void writeRecipeFile(LuaTable recipe, Path outputDir) throws Exception {
-        // Extract recipe ID
-        String recipeId = recipe.get("id").tojstring();
-        String[] parts = recipeId.split(":");
-        String namespace = parts[0];
-        String name = parts[1];
+        try {
+            // Extract recipe ID
+            LuaValue idValue = recipe.get("id");
+            if (idValue.isnil()) {
+                LOGGER.error("[{}] Recipe missing 'id' field", metadata.id);
+                return;
+            }
 
-        // Create recipe directory structure
-        Path recipesDir = outputDir.resolve(namespace).resolve("recipes");
-        Files.createDirectories(recipesDir);
+            String recipeId = idValue.tojstring();
+            String[] parts = recipeId.split(":");
+            if (parts.length != 2) {
+                LOGGER.error("[{}] Invalid recipe ID format: {}", metadata.id, recipeId);
+                return;
+            }
 
-        // Convert LuaTable to proper Minecraft recipe JSON
-        String json = luaRecipeToMinecraftJson(recipe);
-        Path recipeFile = recipesDir.resolve(name + ".json");
-        Files.writeString(recipeFile, json);
+            String namespace = parts[0];
+            String name = parts[1];
 
-        LOGGER.info("Generated recipe file: {}", recipeFile);
+            // Create recipe directory structure
+            Path recipesDir = outputDir.resolve(namespace).resolve("recipes");
+            Files.createDirectories(recipesDir);
+
+            // Convert LuaTable to proper Minecraft recipe JSON
+            String json = luaRecipeToMinecraftJson(recipe);
+            Path recipeFile = recipesDir.resolve(name + ".json");
+            Files.writeString(recipeFile, json);
+
+            LOGGER.info("[{}] Generated recipe file: {}", metadata.id, recipeFile);
+        } catch (Exception e) {
+            LOGGER.error("[{}] Error writing recipe file: {}", metadata.id, e.getMessage());
+        }
     }
 
     private String luaRecipeToMinecraftJson(LuaTable recipe) {
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
+        JsonObject json = new JsonObject();
 
-        boolean first = true;
-
-        // Handle each field specifically for Minecraft format
         LuaValue key = LuaValue.NIL;
         while (true) {
             Varargs next = recipe.next(key);
@@ -375,162 +486,138 @@ public class LuaModContainer {
             // Skip the 'id' field - it shouldn't be in the recipe JSON itself
             if (keyStr.equals("id")) continue;
 
-            if (!first) json.append(",\n");
-
-            json.append("  \"").append(keyStr).append("\": ");
-
             // Special handling for different recipe fields
             if (keyStr.equals("pattern") && value.istable()) {
-                // Convert pattern table to array format
-                json.append(luaTableToJsonArray(value.checktable()));
+                json.add(keyStr, luaTableToJsonArray(value.checktable()));
             } else if (keyStr.equals("result") && value.istable()) {
-                // Handle result object with proper count formatting
-                json.append(luaTableToJsonObjectWithNumbers(value.checktable()));
+                json.add(keyStr, luaTableToJsonObjectWithNumbers(value.checktable()));
             } else {
-                json.append(luaValueToJsonValue(value));
+                json.add(keyStr, luaValueToJsonElement(value));
             }
-
-            first = false;
         }
 
-        json.append("\n}");
-        return json.toString();
+        return GSON.toJson(json);
     }
 
-    private String luaTableToJsonArray(LuaTable table) {
-        StringBuilder json = new StringBuilder();
-        json.append("[\n");
-
-        boolean first = true;
+    private JsonArray luaTableToJsonArray(LuaTable table) {
+        JsonArray arr = new JsonArray();
         for (int i = 1; i <= table.length(); i++) {
-            if (!first) json.append(",\n");
-            json.append("    \"").append(table.get(i).tojstring()).append("\"");
-            first = false;
+            LuaValue val = table.get(i);
+            arr.add(val.tojstring());
         }
-
-        json.append("\n  ]");
-        return json.toString();
+        return arr;
     }
 
-    private String luaTableToJsonObjectWithNumbers(LuaTable table) {
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
+    private JsonObject luaTableToJsonObjectWithNumbers(LuaTable table) {
+        JsonObject obj = new JsonObject();
 
-        boolean first = true;
         LuaValue key = LuaValue.NIL;
         while (true) {
             Varargs next = table.next(key);
             if ((key = next.arg1()).isnil()) break;
 
-            if (!first) json.append(",\n");
-
             String keyStr = key.tojstring();
             LuaValue value = next.arg(2);
-
-            json.append("    \"").append(keyStr).append("\": ");
 
             // Special handling for count - should be a number, not string
             if (keyStr.equals("count") && value.isnumber()) {
-                json.append(value.toint());
+                obj.addProperty(keyStr, value.toint());
             } else {
-                json.append(luaValueToJsonValue(value));
+                obj.add(keyStr, luaValueToJsonElement(value));
             }
-
-            first = false;
         }
 
-        json.append("\n  }");
-        return json.toString();
+        return obj;
     }
 
-    private void writeLootTableFile(String id, LuaTable lootTable, Path outputDir) throws Exception {
-        String[] parts = id.split(":");
-        String namespace = parts[0];
-        String path = parts[1];
-
-        // Create loot table directory structure (note: loot_tables is plural)
-        Path lootTablesDir = outputDir.resolve(namespace).resolve("loot_tables");
-        String[] pathParts = path.split("/");
-        for (int i = 0; i < pathParts.length - 1; i++) {
-            lootTablesDir = lootTablesDir.resolve(pathParts[i]);
+    private com.google.gson.JsonElement luaValueToJsonElement(LuaValue value) {
+        if (value.isstring()) {
+            return new com.google.gson.JsonPrimitive(value.tojstring());
+        } else if (value.isnumber()) {
+            return new com.google.gson.JsonPrimitive(value.tonumber());
+        } else if (value.istable()) {
+            return jsonObjectFromLuaTable(value.checktable());
+        } else if (value.isboolean()) {
+            return new com.google.gson.JsonPrimitive(value.toboolean());
+        } else {
+            return com.google.gson.JsonNull.INSTANCE;
         }
-        Files.createDirectories(lootTablesDir);
-
-        // Convert LuaTable to JSON and write file
-        String json = luaTableToJson(lootTable);
-        Path lootTableFile = lootTablesDir.resolve(pathParts[pathParts.length - 1] + ".json");
-        Files.writeString(lootTableFile, json);
-
-        LOGGER.info("Generated loot table file: {}", lootTableFile);
     }
 
-    private void writeTagFile(String type, String id, LuaTable items, Path outputDir) throws Exception {
-        String[] parts = id.split(":");
-        String namespace = parts[0];
-        String name = parts[1];
+    private JsonObject jsonObjectFromLuaTable(LuaTable table) {
+        JsonObject obj = new JsonObject();
 
-        // Create tag directory structure
-        Path tagsDir = outputDir.resolve(namespace).resolve("tags").resolve(type);
-        Files.createDirectories(tagsDir);
-
-        // Create tag JSON structure
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-        json.append("  \"values\": [\n");
-
-        boolean first = true;
-        for (int i = 1; i <= items.length(); i++) {
-            if (!first) json.append(",\n");
-            json.append("    \"").append(items.get(i).tojstring()).append("\"");
-            first = false;
-        }
-
-        json.append("\n  ]\n");
-        json.append("}");
-
-        Path tagFile = tagsDir.resolve(name + ".json");
-        Files.writeString(tagFile, json.toString());
-
-        LOGGER.info("Generated tag file: {}", tagFile);
-    }
-
-    private String luaTableToJson(LuaTable table) {
-        // Simple Lua table to JSON converter
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-
-        boolean first = true;
         LuaValue key = LuaValue.NIL;
         while (true) {
             Varargs next = table.next(key);
             if ((key = next.arg1()).isnil()) break;
-
-            if (!first) json.append(",\n");
-
-            String keyStr = key.tojstring();
-            LuaValue value = next.arg(2);
-
-            json.append("  \"").append(keyStr).append("\": ");
-            json.append(luaValueToJsonValue(value));
-
-            first = false;
+            obj.add(key.tojstring(), luaValueToJsonElement(next.arg(2)));
         }
 
-        json.append("\n}");
-        return json.toString();
+        return obj;
     }
 
-    private String luaValueToJsonValue(LuaValue value) {
-        if (value.isstring()) {
-            return "\"" + value.tojstring() + "\"";
-        } else if (value.isnumber()) {
-            return value.tojstring();
-        } else if (value.istable()) {
-            return luaTableToJson(value.checktable());
-        } else if (value.isboolean()) {
-            return value.toboolean() ? "true" : "false";
-        } else {
-            return "null";
+    private void writeLootTableFile(String id, LuaTable lootTable, Path outputDir) throws Exception {
+        try {
+            String[] parts = id.split(":");
+            if (parts.length != 2) {
+                LOGGER.error("[{}] Invalid loot table ID format: {}", metadata.id, id);
+                return;
+            }
+
+            String namespace = parts[0];
+            String path = parts[1];
+
+            // Create loot table directory structure (note: loot_tables is plural)
+            Path lootTablesDir = outputDir.resolve(namespace).resolve("loot_tables");
+            String[] pathParts = path.split("/");
+            for (int i = 0; i < pathParts.length - 1; i++) {
+                lootTablesDir = lootTablesDir.resolve(pathParts[i]);
+            }
+            Files.createDirectories(lootTablesDir);
+
+            // Convert LuaTable to JSON and write file
+            String json = GSON.toJson(jsonObjectFromLuaTable(lootTable));
+            Path lootTableFile = lootTablesDir.resolve(pathParts[pathParts.length - 1] + ".json");
+            Files.writeString(lootTableFile, json);
+
+            LOGGER.info("[{}] Generated loot table file: {}", metadata.id, lootTableFile);
+        } catch (Exception e) {
+            LOGGER.error("[{}] Error writing loot table file: {}", metadata.id, e.getMessage());
+        }
+    }
+
+    private void writeTagFile(String type, String id, LuaTable items, Path outputDir) throws Exception {
+        try {
+            String[] parts = id.split(":");
+            if (parts.length != 2) {
+                LOGGER.error("[{}] Invalid tag ID format: {}", metadata.id, id);
+                return;
+            }
+
+            String namespace = parts[0];
+            String name = parts[1];
+
+            // Create tag directory structure
+            Path tagsDir = outputDir.resolve(namespace).resolve("tags").resolve(type);
+            Files.createDirectories(tagsDir);
+
+            // Create tag JSON structure
+            JsonObject tagJson = new JsonObject();
+            JsonArray values = new JsonArray();
+
+            for (int i = 1; i <= items.length(); i++) {
+                values.add(items.get(i).tojstring());
+            }
+
+            tagJson.add("values", values);
+
+            Path tagFile = tagsDir.resolve(name + ".json");
+            Files.writeString(tagFile, GSON.toJson(tagJson));
+
+            LOGGER.info("[{}] Generated tag file: {}", metadata.id, tagFile);
+        } catch (Exception e) {
+            LOGGER.error("[{}] Error writing tag file: {}", metadata.id, e.getMessage());
         }
     }
 
@@ -540,7 +627,6 @@ public class LuaModContainer {
             if (onDatagen.isfunction()) {
                 try {
                     LOGGER.info("Calling onDatagen for mod: {}", metadata.id);
-                    // Pass pack info to Lua if needed
                     onDatagen.call();
                 } catch (Exception e) {
                     LOGGER.error("Error calling onDatagen for mod: {}", metadata.id, e);
@@ -557,7 +643,7 @@ public class LuaModContainer {
         Path sourceTexture = modPath.resolve("assets").resolve(metadata.id).resolve("textures").resolve("item").resolve(itemName + ".png");
 
         if (!Files.exists(sourceTexture)) {
-            LOGGER.warn("Texture missing for {} expected at {}", itemName, sourceTexture);
+            LOGGER.warn("[{}] Texture missing, expected at {}", metadata.id, sourceTexture);
             return;
         }
 
@@ -566,7 +652,7 @@ public class LuaModContainer {
         Path target = targetDir.resolve(itemName + ".png");
         Files.copy(sourceTexture, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
 
-        LOGGER.info("Copied texture {} -> {}", sourceTexture, target);
+        LOGGER.info("[{}] Copied texture {} -> {}", metadata.id, sourceTexture, target);
     }
 
     private String generateDisplayName(String itemName) {
@@ -591,32 +677,41 @@ public class LuaModContainer {
 
     private void generateTranslations(Path ignoredOutputDir) throws Exception {
         if (itemTranslations.isEmpty()) {
-            LOGGER.info("No translations to write for {}", metadata.id);
+            LOGGER.info("[{}] No translations to write", metadata.id);
             return;
         }
 
         Path langDir = getAssetsBase().resolve("lang");
         Files.createDirectories(langDir);
 
-        Path translationFile = langDir.resolve("en_us.json");
-        StringBuilder json = new StringBuilder();
-        json.append("{\n");
-
-        boolean first = true;
+        JsonObject translationObj = new JsonObject();
         for (var e : itemTranslations.entrySet()) {
-            if (!first) json.append(",\n");
-            json.append("  \"").append(e.getKey()).append("\": \"").append(e.getValue()).append("\"");
-            first = false;
+            translationObj.addProperty(e.getKey(), e.getValue());
         }
 
-        json.append("\n}");
-        Files.writeString(translationFile, json.toString());
+        Path translationFile = langDir.resolve("en_us.json");
+        Files.writeString(translationFile, GSON.toJson(translationObj));
 
-        LOGGER.info("Generated translation file with {} entries: {}", itemTranslations.size(), translationFile);
+        LOGGER.info("[{}] Generated translation file with {} entries: {}", metadata.id, itemTranslations.size(), translationFile);
     }
 
+    /**
+     * Get the project root directory using FabricLoader's game directory.
+     * Falls back to build.gradle detection if needed.
+     */
     private Path getProjectRoot() {
-        // Working directory is 'run' when game is running, need to go up one level
+        try {
+            // Try using FabricLoader first (most reliable)
+            Path gameDir = FabricLoader.getInstance().getGameDir();
+            if (gameDir != null && Files.exists(gameDir.resolve("build.gradle"))) {
+                LOGGER.info("Using FabricLoader game directory as project root: {}", gameDir);
+                return gameDir;
+            }
+        } catch (Exception e) {
+            LOGGER.debug("FabricLoader game dir unavailable: {}", e.getMessage());
+        }
+
+        // Fallback: Working directory detection
         Path cwd = Path.of(System.getProperty("user.dir"));
 
         // If we're in the 'run' folder, go up to parent
@@ -688,10 +783,10 @@ public class LuaModContainer {
                         }
                     });
                 }
-                LOGGER.info("Migrated legacy assets folder: {} -> {}", from, to);
+                LOGGER.info("[{}] Migrated legacy assets folder: {} -> {}", metadata.id, from, to);
             }
         } catch (Exception e) {
-            LOGGER.error("Error migrating legacy run/src assets for mod {}", metadata.id, e);
+            LOGGER.error("[{}] Error migrating legacy run/src assets", metadata.id, e);
         }
     }
 
@@ -707,7 +802,7 @@ public class LuaModContainer {
 
         Path datagenScript = modPath.resolve(metadata.datagen.datagenScript);
         if (!Files.exists(datagenScript)) {
-            LOGGER.warn("Datagen script not found for mod {}: {}", metadata.id, datagenScript);
+            LOGGER.warn("[{}] Datagen script not found", metadata.id);
             return;
         }
 
@@ -722,10 +817,10 @@ public class LuaModContainer {
         setupModGlobals();
         setupAssetOnlyDatagenGlobals(outputDir);
 
-        globals.load(new FileReader(datagenScript.toFile()), metadata.id + ":assetgen").call();
+        modGlobals.load(new FileReader(datagenScript.toFile()), metadata.id + ":assetgen").call();
 
         // Call onDatagen if it exists
-        LuaValue datagenModTable = globals.get("mod");
+        LuaValue datagenModTable = modGlobals.get("mod");
         if (datagenModTable != null && datagenModTable.istable()) {
             LuaValue onDatagen = datagenModTable.get("onDatagen");
             if (onDatagen.isfunction()) {
@@ -745,10 +840,15 @@ public class LuaModContainer {
      */
     private void setupAssetOnlyDatagenGlobals(Path outputDir) {
         // Add mock item registration that only generates assets
-        globals.set("register_item", new VarArgFunction() {
+        modGlobals.set("register_item", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("[{}] register_item requires 1 argument", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     String itemName = args.arg(1).tojstring();
 
                     // DON'T register the item - just generate assets
@@ -764,17 +864,17 @@ public class LuaModContainer {
                     String displayName = generateDisplayName(itemName);
                     itemTranslations.put(translationKey, displayName);
 
-                    LOGGER.info("Pre-generated assets for item: {}:{}", metadata.id, itemName);
+                    LOGGER.info("[{}] Pre-generated assets for item", metadata.id);
                     return LuaValue.NIL;
                 } catch (Exception e) {
-                    LOGGER.error("Error pre-generating assets for item in mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error pre-generating assets: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
         });
 
         // Mock add_item_to_group - does nothing during asset generation
-        globals.set("add_item_to_group", new VarArgFunction() {
+        modGlobals.set("add_item_to_group", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 // Skip during asset-only generation
@@ -783,43 +883,58 @@ public class LuaModContainer {
         });
 
         // Keep recipe generation
-        globals.set("add_recipe", new VarArgFunction() {
+        modGlobals.set("add_recipe", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 1) {
+                        LOGGER.error("[{}] add_recipe requires 1 argument", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     LuaTable recipe = args.arg(1).checktable();
                     writeRecipeFile(recipe, outputDir);
                 } catch (Exception e) {
-                    LOGGER.error("Error generating recipe for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error generating recipe: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
         });
 
-        globals.set("add_loot_table", new VarArgFunction() {
+        modGlobals.set("add_loot_table", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 2) {
+                        LOGGER.error("[{}] add_loot_table requires 2 arguments", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     String id = args.arg(1).tojstring();
                     LuaTable lootTable = args.arg(2).checktable();
                     writeLootTableFile(id, lootTable, outputDir);
                 } catch (Exception e) {
-                    LOGGER.error("Error generating loot table for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error generating loot table: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }
         });
 
-        globals.set("add_tag", new VarArgFunction() {
+        modGlobals.set("add_tag", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 try {
+                    if (args.narg() < 3) {
+                        LOGGER.error("[{}] add_tag requires 3 arguments", metadata.id);
+                        return LuaValue.NIL;
+                    }
+
                     String type = args.arg(1).tojstring();
                     String id = args.arg(2).tojstring();
                     LuaTable items = args.arg(3).checktable();
                     writeTagFile(type, id, items, outputDir);
                 } catch (Exception e) {
-                    LOGGER.error("Error generating tag for mod: {}", metadata.id, e);
+                    LOGGER.error("[{}] Error generating tag: {}", metadata.id, e.getMessage());
                 }
                 return LuaValue.NIL;
             }

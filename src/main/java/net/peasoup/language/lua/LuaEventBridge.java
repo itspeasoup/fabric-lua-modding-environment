@@ -18,7 +18,19 @@ public class LuaEventBridge {
 
     // Map simple class names to known event classes
     private static final Map<String, Class<?>> EVENT_CLASS_MAP = new HashMap<>();
-    static {
+    
+    private static boolean SCANNED = false;
+
+    /**
+     * Initialize the event class map by scanning for Event classes at runtime.
+     * This ensures we pick up events from all available Fabric API modules.
+     */
+    public static synchronized void initializeEventClasses() {
+        if (SCANNED) return;
+        
+        LOGGER.info("Scanning for Fabric event classes...");
+        
+        // Start with hardcoded known event classes
         List<Class<?>> eventClasses = Arrays.asList(
                 net.fabricmc.fabric.api.event.lifecycle.v1.CommonLifecycleEvents.class,
                 net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.class,
@@ -33,8 +45,63 @@ public class LuaEventBridge {
                 net.fabricmc.fabric.api.event.player.AttackBlockCallback.class,
                 net.fabricmc.fabric.api.event.player.AttackEntityCallback.class
         );
+        
         for (Class<?> clazz : eventClasses) {
-            EVENT_CLASS_MAP.put(clazz.getSimpleName(), clazz);
+            registerEventClass(clazz);
+        }
+        
+        // Try to dynamically scan for more events
+        scanForAdditionalEvents();
+        
+        SCANNED = true;
+        LOGGER.info("Event class scan complete. Registered {} event classes", EVENT_CLASS_MAP.size());
+    }
+
+    private static void registerEventClass(Class<?> clazz) {
+        EVENT_CLASS_MAP.put(clazz.getSimpleName(), clazz);
+        LOGGER.debug("Registered event class: {}", clazz.getSimpleName());
+    }
+
+    /**
+     * Attempt to dynamically scan for additional event classes.
+     * This helps catch events from custom mods and newer Fabric API versions.
+     */
+    private static void scanForAdditionalEvents() {
+        try {
+            ClassLoader cl = LuaEventBridge.class.getClassLoader();
+            
+            // Try to find more event classes from fabric-api package
+            String[] packages = {
+                    "net.fabricmc.fabric.api.event",
+                    "net.fabricmc.fabric.api.networking.v1",
+                    "net.fabricmc.fabric.api.entity.event.v1"
+            };
+            
+            for (String pkg : packages) {
+                try {
+                    // Try loading common event holder classes
+                    String[] commonClasses = {
+                            pkg + ".ClientLifecycleEvents",
+                            pkg + ".ClientTickEvents",
+                            pkg + ".ClientPlayConnectionEvents",
+                    };
+                    
+                    for (String className : commonClasses) {
+                        try {
+                            Class<?> clazz = cl.loadClass(className);
+                            if (!EVENT_CLASS_MAP.containsKey(clazz.getSimpleName())) {
+                                registerEventClass(clazz);
+                            }
+                        } catch (ClassNotFoundException ignored) {
+                            // Class not available in this version
+                        }
+                    }
+                } catch (Exception e) {
+                    LOGGER.debug("Error scanning package {}: {}", pkg, e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.debug("Dynamic event class scanning failed: {}", e.getMessage());
         }
     }
 
@@ -45,6 +112,8 @@ public class LuaEventBridge {
      * Preferred registration: by event class name and field name!
      */
     public static void registerEventByClassAndField(String className, String fieldName, LuaFunction handler) {
+        initializeEventClasses();
+        
         Event<?> eventObj = findEventByClassAndField(className, fieldName);
         Class<?> callbackType = findCallbackTypeByClassAndField(className, fieldName);
 
@@ -59,7 +128,7 @@ public class LuaEventBridge {
             hookFabricEvent(eventObj, callbackType);
         }
 
-        LOGGER.info("Registered Lua handler for event '{}.{}': {}", className, fieldName, eventObj);
+        LOGGER.info("Registered Lua handler for event '{}.{}'", className, fieldName);
     }
 
     private static Event<?> findEventByClassAndField(String className, String fieldName) {
@@ -111,8 +180,15 @@ public class LuaEventBridge {
         return new org.luaj.vm2.lib.ThreeArgFunction() {
             @Override
             public LuaValue call(LuaValue className, LuaValue fieldName, LuaValue handler) {
-                if (!className.isstring() || !fieldName.isstring() || !handler.isfunction()) return LuaValue.NIL;
-                registerEventByClassAndField(className.tojstring(), fieldName.tojstring(), (LuaFunction) handler);
+                try {
+                    if (!className.isstring() || !fieldName.isstring() || !handler.isfunction()) {
+                        LOGGER.error("register_event requires (string, string, function), got wrong types");
+                        return LuaValue.NIL;
+                    }
+                    registerEventByClassAndField(className.tojstring(), fieldName.tojstring(), (LuaFunction) handler);
+                } catch (Exception e) {
+                    LOGGER.error("Error in register_event: {}", e.getMessage());
+                }
                 return LuaValue.NIL;
             }
         };
@@ -122,31 +198,36 @@ public class LuaEventBridge {
         return new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue arg) {
-                Object obj = org.luaj.vm2.lib.jse.CoerceLuaToJava.coerce(arg, Object.class);
-                if (obj == null) return LuaValue.valueOf("nil");
-                Class<?> clazz = obj.getClass();
-                StringBuilder sb = new StringBuilder();
-                sb.append("Class: ").append(clazz.getName()).append("\nFields:\n");
-                for (Field f : clazz.getFields()) {
-                    sb.append("  ").append(f.getType().getSimpleName()).append(" ").append(f.getName()).append("\n");
-                }
-                sb.append("Methods:\n");
-                for (Method m : clazz.getMethods()) {
-                    sb.append("  ").append(m.getReturnType().getSimpleName()).append(" ").append(m.getName()).append("(");
-                    for (int i = 0; i < m.getParameterCount(); i++) {
-                        if (i > 0) sb.append(", ");
-                        sb.append(m.getParameterTypes()[i].getSimpleName());
+                try {
+                    Object obj = org.luaj.vm2.lib.jse.CoerceLuaToJava.coerce(arg, Object.class);
+                    if (obj == null) return LuaValue.valueOf("nil");
+                    Class<?> clazz = obj.getClass();
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("Class: ").append(clazz.getName()).append("\nFields:\n");
+                    for (Field f : clazz.getFields()) {
+                        sb.append("  ").append(f.getType().getSimpleName()).append(" ").append(f.getName()).append("\n");
                     }
-                    sb.append(")\n");
+                    sb.append("Methods:\n");
+                    for (Method m : clazz.getMethods()) {
+                        sb.append("  ").append(m.getReturnType().getSimpleName()).append(" ").append(m.getName()).append("(");
+                        for (int i = 0; i < m.getParameterCount(); i++) {
+                            if (i > 0) sb.append(", ");
+                            sb.append(m.getParameterTypes()[i].getSimpleName());
+                        }
+                        sb.append(")\n");
+                    }
+                    return LuaValue.valueOf(sb.toString());
+                } catch (Exception e) {
+                    LOGGER.error("Error in describe_class: {}", e.getMessage());
+                    return LuaValue.valueOf("error: " + e.getMessage());
                 }
-                return LuaValue.valueOf(sb.toString());
             }
         };
     }
 
     public static <T> void hookFabricEvent(Event<T> event, Class<?> callbackType) {
         if (event == null || HOOKED_EVENTS.contains(event) || callbackType == null) {
-            LOGGER.info("event is null/event is already hooked/callbacktype is null");
+            LOGGER.debug("Event already hooked or invalid");
             return;
         }
         try {

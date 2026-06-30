@@ -53,7 +53,11 @@ public class LuaModdingEnvironment implements ModInitializer {
 				StringBuilder sb = new StringBuilder();
 				for (int i = 1; i <= args.narg(); i++) {
 					if (i > 1) sb.append(" ");
-					sb.append(args.arg(i).tojstring());
+					try {
+						sb.append(args.arg(i).tojstring());
+					} catch (Exception e) {
+						sb.append("<error>");
+					}
 				}
 				LOGGER.info("[Lua pre-gen] {}", sb.toString());
 				return LuaValue.NIL;
@@ -106,7 +110,11 @@ public class LuaModdingEnvironment implements ModInitializer {
 				StringBuilder sb = new StringBuilder();
 				for (int i = 1; i <= args.narg(); i++) {
 					if (i > 1) sb.append(" ");
-					sb.append(args.arg(i).tojstring());
+					try {
+						sb.append(args.arg(i).tojstring());
+					} catch (Exception e) {
+						sb.append("<error>");
+					}
 				}
 				LOGGER.info("[Lua print] {}", sb.toString());
 				return LuaValue.NIL;
@@ -115,6 +123,9 @@ public class LuaModdingEnvironment implements ModInitializer {
 
 		// expose all fabric events properly
 		exposeFabricEvents(globals);
+
+		// Initialize dynamic event class scanner
+		LuaEventBridge.initializeEventClasses();
 
 		// register improved event bridge (now takes className, fieldName, handler)
 		globals.set("register_event", LuaEventBridge.getRegisterEventFunction());
@@ -178,11 +189,11 @@ public class LuaModdingEnvironment implements ModInitializer {
 					Object ev = f.get(null);
 					if (!(ev instanceof net.fabricmc.fabric.api.event.Event<?>)) continue;
 					classTable.set(f.getName(), org.luaj.vm2.lib.jse.CoerceJavaToLua.coerce(ev));
-					LOGGER.info("exposed Fabric event instance: {}.{}", clazz.getSimpleName(), f.getName());
+					LOGGER.debug("exposed Fabric event instance: {}.{}", clazz.getSimpleName(), f.getName());
 				}
 
 				globals.set(clazz.getSimpleName(), classTable);
-				LOGGER.info("exposed Fabric event: {}", clazz.getSimpleName());
+				LOGGER.info("exposed Fabric event class: {}", clazz.getSimpleName());
 			}
 		} catch (Exception e) {
 			LOGGER.error("error exposing fabric events", e);
