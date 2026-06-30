@@ -1,14 +1,14 @@
-# lua modding environment - a guide for cool people
+# lua modding environment - guide for cool people
 
-hey!! welcome to the lua modding environment!! this is like fabric, but for people who prefer lua over java (valid opinion tbh)
+hey!! welcome to the lua modding environment!! this is like fabric, but for people who prefer lua over java
 
 ## okay so what do i do first
 
-you're gonna wanna create a folder in the `mods/` directory. let's say you wanna make a cool mod called `super-duper-mod`. you'd make:
+you're gonna wanna create a folder in the `mods/` directory. let's say you wanna make a mod called `mod`. you'd make:
 
 ```
 mods/
-└── super-duper-mod/
+└── mod/
     ├── lua_mod.json        # mod metadata (like fabric.mod.json but simpler)
     ├── main.lua            # your mod code goes here
     ├── client.lua          # client-side stuff (optional)
@@ -22,10 +22,10 @@ this is where you tell the loader what your mod is
 ```json
 {
   "schema_version": 1,
-  "id": "super_duper_mod",
+  "id": "mod",
   "version": "1.0.0",
-  "name": "Super Duper Mod",
-  "description": "a mod that does super duper things",
+  "name": "mod",
+  "description": "a mod that does things",
   "authors": ["your-name"],
   "license": "MIT",
   "environment": "*",
@@ -33,7 +33,7 @@ this is where you tell the loader what your mod is
   "client_script": "client.lua",
   "contact": {
     "homepage": "https://your-website.com",
-    "sources": "https://github.com/you/super-duper-mod"
+    "sources": "https://github.com/you/mod"
   },
   "depends": {
     "minecraft": ">=1.21.0"
@@ -46,10 +46,10 @@ this is where you tell the loader what your mod is
 }
 ```
 
-### the fields explained real quick
+### the fields
 
 - `id`: your mod's unique identifier (no spaces, use underscores)
-- `version`: semantic versioning (major.minor.patch)
+- `version`: semantic versioning (so basically major.minor.patch)
 - `environment`: `"*"` for both client and server, `"server"` for server only, `"client"` for client only
 - `depends`: what your mod needs (minecraft version, fabric-api, other mods)
 - `datagen`: if you wanna generate recipes, tags, loot tables, etc, enable this
@@ -59,14 +59,14 @@ this is where you tell the loader what your mod is
 ```lua
 -- this is your mod!!
 mod = {
-    info = MOD_INFO,  -- Contains id, name, version from lua_mod.json
+    info = MOD_INFO,  -- contains id, name and version from lua_mod.json
     
     onInitialize = function()
         print("my mod is starting up!")
         
         -- Register event handlers
         register_event("ServerLifecycleEvents", "SERVER_STARTED", function()
-            print("server started!! let's goooo")
+            print("server started yippie")
         end)
     end
 }
@@ -77,7 +77,7 @@ if mod.onInitialize then
 end
 ```
 
-### what globals you get for free
+### globals you get (at the price of free)
 
 - `MOD_INFO` - a table with your mod's metadata (id, name, version, description)
 - `mod_resource(path)` - returns `"mod_id:path"` for resource identification
@@ -144,11 +144,11 @@ here's what's available out of the box:
 - `AttackBlockCallback` - left-clicking blocks
 - `AttackEntityCallback` - attacking entities
 
-if you want more events, you can extend the hardcoded list in `LuaEventBridge.java`, or let me know and i'll add em
+if you want more events, you can extend the hardcoded list in `LuaEventBridge.java`, or let me know!
 
-## data generation - making recipes, tags, loot tables
+## data generation - making recipes, tags, loot tables and stuff
 
-if you enable datagen in your `lua_mod.json`, you can generate minecraft data files automatically
+if you enable datagen in your `lua_mod.json`, you can generate minecraft data files automatically!!
 
 ```lua
 -- datagen.lua
@@ -158,38 +158,38 @@ mod = {
     onDatagen = function()
         print("generating data for " .. MOD_INFO.name)
         
-        -- Register items
-        register_item("cool_item", {
+        -- register items
+        register_item("item", {
             max_count = 64,
             fireproof = false
         })
         
         -- Add item to creative tab
-        add_item_to_group("super_duper_mod:cool_item", "ingredients")
+        add_item_to_group("mod:item", "ingredients")
         
         -- Create a recipe
         add_recipe({
-            id = "super_duper_mod:cool_item",
+            id = "mod:item",
             type = "minecraft:crafting_shapeless",
             ingredients = {
                 { item = "minecraft:stick" },
                 { item = "minecraft:coal" }
             },
             result = {
-                item = "super_duper_mod:cool_item",
+                item = "mod:item",
                 count = 4
             }
         })
         
         -- Create a loot table
-        add_loot_table("super_duper_mod:blocks/cool_block", {
+        add_loot_table("mod:blocks/block", {
             type = "minecraft:block",
             pools = { }
         })
         
         -- Create tags
-        add_tag("items", "super_duper_mod:cool_items", {
-            "super_duper_mod:cool_item",
+        add_tag("items", "mod:items", {
+            "mod:item",
             "minecraft:stick"
         })
     end
@@ -211,15 +211,15 @@ this will call all your `onDatagen` functions and generate files to `src/main/ge
 put your textures and models in:
 
 ```
-mods/super-duper-mod/
+mods/mod/
 └── assets/
-    └── super_duper_mod/
+    └── mod/
         ├── textures/
         │   └── item/
-        │       └── cool_item.png
+        │       └── item.png
         └── models/
             └── item/
-                └── cool_item.json
+                └── item.json
 ```
 
 the datagen system can auto-generate item models for you if you register items, but you'll need to provide the textures
@@ -242,14 +242,14 @@ print(info)  -- prints class name, fields, methods
 ### getting mod resources
 
 ```lua
-local texture_path = mod_resource("textures/item/cool_item.png")
--- returns: "super_duper_mod:textures/item/cool_item.png"
+local texture_path = mod_resource("textures/item/item.png")
+-- returns: "mod:textures/item/item.png"
 ```
 
 ### getting file paths
 
 ```lua
-local file_path = mod_path("assets/super_duper_mod/textures/item/cool_item.png")
+local file_path = mod_path("assets/mod/textures/item/item.png")
 print(file_path)  -- absolute path to your mod directory
 ```
 
@@ -258,7 +258,7 @@ print(file_path)  -- absolute path to your mod directory
 if your lua code crashes, check the logs. they'll have your mod id prefixed so you can find em:
 
 ```
-[00:00:00] [Render thread/INFO] [lua-mod-container] [super_duper_mod] Error in add_recipe: Invalid recipe ID format
+[00:00:00] [Render thread/INFO] [lua-mod-container] [mod] Error in add_recipe: Invalid recipe ID format
 ```
 
 common errors:
@@ -281,4 +281,4 @@ if something breaks or you need a feature, just open an issue on the github!! or
 
 ## fin
 
-that's basically it!! you know how to make a lua mod now. go make cool stuff and have fun!! remember to backup your work and test often :>
+that's basically it!! you know how to make a lua mod now. go make stuff and have fun!! :>
