@@ -1,6 +1,6 @@
 # lua modding environment - guide for cool people
 
-hey!! welcome to the lua modding environment!! this is like fabric, but for people who prefer lua over java
+hey!! welcome to the lua modding environment!! it's like fabric, but for people who prefer lua over java because java kinda stinks!
 
 ## okay so what do i do first
 
