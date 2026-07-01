@@ -52,22 +52,13 @@ public class DatagenAPI {
             }
         });
 
-        // datagen.client_item(name, modelId)
-        datagen.set("client_item", new TwoArgFunction() {
+        // datagen.simple_item(item_name)
+        datagen.set("simple_item", new OneArgFunction() {
             @Override
-            public LuaValue call(LuaValue name, LuaValue modelId) {
-                generateClientItem(name.tojstring(), modelId.tojstring());
-                return LuaValue.NIL;
-            }
-        });
-
-        // datagen.item_model(item_name, model_table)
-        datagen.set("item_model", new TwoArgFunction() {
-            @Override
-            public LuaValue call(LuaValue itemName, LuaValue modelTable) {
+            public LuaValue call(LuaValue itemName) {
                 if (!itemName.isstring())
                     throw new LuaError("Item name must be a string");
-                generateItemModel(itemName.tojstring(), modelTable);
+                generateSimpleItem(itemName.tojstring());
                 return LuaValue.NIL;
             }
         });
@@ -101,7 +92,6 @@ public class DatagenAPI {
             public LuaValue call(LuaValue blockName, LuaValue dropItem) {
                 if (!blockName.isstring())
                     throw new LuaError("Block name must be a string");
-                // If they pass nil for the second argument, it passes null to Java
                 String dropId = dropItem.isnil() ? null : dropItem.tojstring();
                 generateBlockDrop(blockName.tojstring(), dropId);
                 return LuaValue.NIL;
@@ -113,7 +103,6 @@ public class DatagenAPI {
             public LuaValue call(LuaValue blockName, LuaValue item, LuaValue level) {
                 if (!blockName.isstring())
                     throw new LuaError("Block name must be a string");
-                // If they pass nil for the second argument, it passes null to Java
                 String dropId = item.isnil() ? null : item.tojstring();
                 generateMiningTag(blockName.tojstring(), dropId, level.toint());
                 return LuaValue.NIL;
@@ -151,6 +140,7 @@ public class DatagenAPI {
     public void generateSimpleBlock(String blockName) {
         try {
             // 1. BlockState (assets/modid/blockstates/blockName.json)
+            // References the block model WITHOUT generating it
             Map<String, Object> variants = Map.of("", Map.of("model", modId + ":block/" + blockName));
             Map<String, Object> blockState = Map.of("variants", variants);
 
@@ -158,7 +148,7 @@ public class DatagenAPI {
             Files.createDirectories(statePath.getParent());
             Files.writeString(statePath, GSON.toJson(blockState));
 
-            // 2. Block Model (assets/modid/models/block/blockName.json)
+            // 2. Block Model - Use Minecraft's default cube_all model
             Map<String, Object> blockModel = Map.of("parent", "minecraft:block/cube_all", "textures",
                     Map.of("all", modId + ":block/" + blockName));
 
@@ -166,23 +156,45 @@ public class DatagenAPI {
             Files.createDirectories(bModelPath.getParent());
             Files.writeString(bModelPath, GSON.toJson(blockModel));
 
-            // 3. Item Model (assets/modid/models/item/blockName.json)
-            Map<String, Object> itemModel = Map.of("parent", modId + ":block/" + blockName);
+            // 3. Item Model - References the block model, no need for separate item model
+            generateSimpleItemModel(blockName, modId + ":block/" + blockName);
 
-            Path iModelPath = modPath.resolve("assets/" + modId + "/models/item/" + blockName + ".json");
-            Files.createDirectories(iModelPath.getParent());
-            Files.writeString(iModelPath, GSON.toJson(itemModel));
-
-            // 4. Client Item Definition (1.21.4 Requirement for the BlockItem)
-            // Inside generateSimpleBlock(...)
-            generateClientItem(blockName, modId + ":block/" + blockName);
-
-            // THE NEW AUTOMATION: Automatically make it drop itself!
+            // 4. Auto loot table
             generateBlockDrop(blockName, null);
 
             LOGGER.info("Generated BlockState & Models for: {}", blockName);
         } catch (Exception e) {
             LOGGER.error("Failed to generate block resources for {}", blockName, e);
+        }
+    }
+
+    // ==========================================
+    // 4. ITEM GENERATION
+    // ==========================================
+
+    public void generateSimpleItem(String itemName) {
+        try {
+            // Just generate the item model using Minecraft's flat item model
+            generateSimpleItemModel(itemName, "minecraft:item/handheld");
+
+            LOGGER.info("Generated simple item model for: {}", itemName);
+        } catch (Exception e) {
+            LOGGER.error("Failed to generate item model for {}", itemName, e);
+        }
+    }
+
+    /**
+     * Generate a simple item model with a parent (no custom properties)
+     */
+    private void generateSimpleItemModel(String itemName, String parentModel) {
+        try {
+            Path itemModelPath = modPath.resolve("assets/" + modId + "/models/item/" + itemName + ".json");
+            Files.createDirectories(itemModelPath.getParent());
+
+            Map<String, Object> itemModel = Map.of("parent", parentModel);
+            Files.writeString(itemModelPath, GSON.toJson(itemModel));
+        } catch (Exception e) {
+            LOGGER.error("Failed to write item model for {}", itemName, e);
         }
     }
 
@@ -248,49 +260,13 @@ public class DatagenAPI {
         }
 
         if (!alreadyExists) {
-            // THE FIX: Structure the tag entry as an object instead of a raw string literal
             JsonObject optionalEntry = new JsonObject();
             optionalEntry.addProperty("id", blockId);
-            optionalEntry.addProperty("required", false); // Stops Minecraft from disabling the pack!
+            optionalEntry.addProperty("required", false);
             valuesArray.add(optionalEntry);
         }
 
         Files.writeString(path, GSON.toJson(tagData));
-    }
-
-    // ==========================================
-    // 4. ITEM GENERATION
-    // ==========================================
-
-    public void generateClientItem(String name, String modelId) {
-        try {
-            Path dir = modPath.resolve("assets").resolve(modId).resolve("items");
-            Files.createDirectories(dir);
-
-            Map<String, Object> root = new HashMap<>();
-            Map<String, String> modelMap = new HashMap<>();
-
-            modelMap.put("type", "minecraft:model");
-            modelMap.put("model", modelId);
-            root.put("model", modelMap);
-
-            Files.writeString(dir.resolve(name + ".json"), GSON.toJson(root));
-            LOGGER.info("Generated client item definition: {}", name);
-        } catch (Exception e) {
-            LOGGER.error("Failed to generate client item", e);
-        }
-    }
-
-    public void generateItemModel(String itemName, LuaValue modelTable) {
-        try {
-            Object nativeModelData = convertLuaToJson(modelTable);
-            Path modelPath = modPath.resolve("assets/" + modId + "/models/item/" + itemName + ".json");
-
-            Files.createDirectories(modelPath.getParent());
-            Files.writeString(modelPath, GSON.toJson(nativeModelData));
-        } catch (Exception e) {
-            LOGGER.error("Failed to generate item model for {}", itemName, e);
-        }
     }
 
     // ==========================================
@@ -299,11 +275,9 @@ public class DatagenAPI {
 
     public void generateRecipe(String recipeName, LuaValue recipeTable) {
         try {
-            // 1. Convert Lua to Java Maps/Lists using your method
             Object nativeRecipeData = convertLuaToJson(recipeTable);
             Path recipePath = modPath.resolve("data/" + modId + "/recipe/" + recipeName + ".json");
 
-            // 2. GSON converts the native Map/List straight to clean JSON string
             Files.createDirectories(recipePath.getParent());
             Files.writeString(recipePath, GSON.toJson(nativeRecipeData));
             LOGGER.info("Generated dynamic recipe data: {}:{}", modId, recipeName);
@@ -339,7 +313,6 @@ public class DatagenAPI {
 
             String finalDrop = (dropItem == null) ? modId + ":" + blockName : dropItem;
 
-            // Clean raw json injection matching standard Mojang loot tables
             String rawLootJson = """
                     {
                       "type": "minecraft:block",
@@ -368,6 +341,7 @@ public class DatagenAPI {
             LOGGER.error("Failed to generate block drop loot table", e);
         }
     }
+
     // ==========================================
     // 6. HELPERS
     // ==========================================
