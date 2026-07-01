@@ -139,16 +139,8 @@ public class DatagenAPI {
 
     public void generateSimpleBlock(String blockName) {
         try {
-            // 1. BlockState (assets/modid/blockstates/blockName.json)
-            // References the block model WITHOUT generating it
-            Map<String, Object> variants = Map.of("", Map.of("model", modId + ":block/" + blockName));
-            Map<String, Object> blockState = Map.of("variants", variants);
-
-            Path statePath = modPath.resolve("assets/" + modId + "/blockstates/" + blockName + ".json");
-            Files.createDirectories(statePath.getParent());
-            Files.writeString(statePath, GSON.toJson(blockState));
-
-            // 2. Block Model - Use Minecraft's default cube_all model
+            // 1. Block Model (assets/modid/models/block/blockName.json)
+            // Use Minecraft's default cube_all model
             Map<String, Object> blockModel = Map.of("parent", "minecraft:block/cube_all", "textures",
                     Map.of("all", modId + ":block/" + blockName));
 
@@ -156,8 +148,22 @@ public class DatagenAPI {
             Files.createDirectories(bModelPath.getParent());
             Files.writeString(bModelPath, GSON.toJson(blockModel));
 
-            // 3. Item Model - References the block model, no need for separate item model
-            generateSimpleItemModel(blockName, modId + ":block/" + blockName);
+            // 2. BlockState (assets/modid/blockstates/blockName.json)
+            // References the block model we just created
+            Map<String, Object> variants = Map.of("", Map.of("model", modId + ":block/" + blockName));
+            Map<String, Object> blockState = Map.of("variants", variants);
+
+            Path statePath = modPath.resolve("assets/" + modId + "/blockstates/" + blockName + ".json");
+            Files.createDirectories(statePath.getParent());
+            Files.writeString(statePath, GSON.toJson(blockState));
+
+            // 3. Item Model (assets/modid/models/item/blockName.json)
+            // Just reference the block model
+            Map<String, Object> itemModel = Map.of("parent", modId + ":block/" + blockName);
+
+            Path iModelPath = modPath.resolve("assets/" + modId + "/models/item/" + blockName + ".json");
+            Files.createDirectories(iModelPath.getParent());
+            Files.writeString(iModelPath, GSON.toJson(itemModel));
 
             // 4. Auto loot table
             generateBlockDrop(blockName, null);
@@ -174,27 +180,17 @@ public class DatagenAPI {
 
     public void generateSimpleItem(String itemName) {
         try {
-            // Just generate the item model using Minecraft's flat item model
-            generateSimpleItemModel(itemName, "minecraft:item/handheld");
+            // Generate item model using Minecraft's flat item model
+            Map<String, Object> itemModel = Map.of("parent", "item/generated", "textures",
+                    Map.of("layer0", modId + ":item/" + itemName));
+
+            Path itemModelPath = modPath.resolve("assets/" + modId + "/models/item/" + itemName + ".json");
+            Files.createDirectories(itemModelPath.getParent());
+            Files.writeString(itemModelPath, GSON.toJson(itemModel));
 
             LOGGER.info("Generated simple item model for: {}", itemName);
         } catch (Exception e) {
             LOGGER.error("Failed to generate item model for {}", itemName, e);
-        }
-    }
-
-    /**
-     * Generate a simple item model with a parent (no custom properties)
-     */
-    private void generateSimpleItemModel(String itemName, String parentModel) {
-        try {
-            Path itemModelPath = modPath.resolve("assets/" + modId + "/models/item/" + itemName + ".json");
-            Files.createDirectories(itemModelPath.getParent());
-
-            Map<String, Object> itemModel = Map.of("parent", parentModel);
-            Files.writeString(itemModelPath, GSON.toJson(itemModel));
-        } catch (Exception e) {
-            LOGGER.error("Failed to write item model for {}", itemName, e);
         }
     }
 
