@@ -63,7 +63,8 @@ public class LuaModContainer {
             public Varargs invoke(Varargs args) {
                 StringBuilder sb = new StringBuilder();
                 for (int i = 1; i <= args.narg(); i++) {
-                    if (i > 1) sb.append(" ");
+                    if (i > 1)
+                        sb.append(" ");
                     sb.append(args.arg(i).tojstring());
                 }
                 LOGGER.info("[{}] {}", metadata.id, sb.toString());
@@ -75,7 +76,8 @@ public class LuaModContainer {
         globals.set("start_thread", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue func) {
-                if (!func.isfunction()) throw new LuaError("start_thread requires a function");
+                if (!func.isfunction())
+                    throw new LuaError("start_thread requires a function");
 
                 // Create a new Lua coroutine
                 LuaThread thread = new LuaThread(globals, func);
@@ -93,7 +95,8 @@ public class LuaModContainer {
 
                 // Ensure they aren't trying to pause the main Minecraft loading thread
                 if (thread == null || thread.state.status == LuaThread.STATUS_DEAD) {
-                    throw new LuaError("wait() can only be called inside a thread! Wrap your code in start_thread(function() ... end)");
+                    throw new LuaError(
+                            "wait() can only be called inside a thread! Wrap your code in start_thread(function() ... end)");
                 }
 
                 // Add to Java's waiting list
@@ -267,42 +270,46 @@ public class LuaModContainer {
      * Call the mod's onInitialize function if it exists
      */
     public boolean callInitialize() {
-        if (crashed || state == ModState.running) {
-            LOGGER.warn("skipping initialization of {} mod: {}", state.name(), metadata.id);
-            return false;
-        }
-
-        if (mainChunk == null) {
-            recordError("initializing", "cannot initialize - main script not loaded", null);
-            return false;
-        }
-
-        try {
-            state = ModState.initializing;
-
-            // Execute the main script
-            safeExecute(mainChunk, "main script");
-
-            // Call onInitialize() if it exists
-            LuaValue initFunc = globals.get("onInitialize");
-            if (initFunc.isfunction()) {
-                safeExecute(initFunc, "onInitialize");
-                LOGGER.info("initialized mod: {} v{}", metadata.name, metadata.version);
-            } else {
-                LOGGER.debug("no onInitialize function found for mod: {}", metadata.id);
-            }
-
-            state = ModState.running;
-            return true;
-
-        } catch (Exception e) {
-            recordError("initializing", "failed to initialize mod", e);
-            state = ModState.crashed;
-            crashed = true;
-            return false;
-        }
+    if (crashed || state == ModState.running) {
+        LOGGER.warn("skipping initialization of {} mod: {}", state.name(), metadata.id);
+        return false;
     }
 
+    if (mainChunk == null) {
+        recordError("initializing", "cannot initialize - main script not loaded", null);
+        return false;
+    }
+
+    try {
+        state = ModState.initializing;
+
+        // Execute the main script
+        safeExecute(mainChunk, "main script");
+
+        // Generate assets at runtime BEFORE calling onInitialize
+        if (metadata.hasDatagen()) {
+            generateAssetsAtRuntime();
+        }
+
+        // Call onInitialize() if it exists
+        LuaValue initFunc = globals.get("onInitialize");
+        if (initFunc.isfunction()) {
+            safeExecute(initFunc, "onInitialize");
+            LOGGER.info("initialized mod: {} v{}", metadata.name, metadata.version);
+        } else {
+            LOGGER.debug("no onInitialize function found for mod: {}", metadata.id);
+        }
+
+        state = ModState.running;
+        return true;
+
+    } catch (Exception e) {
+        recordError("initializing", "failed to initialize mod", e);
+        state = ModState.crashed;
+        crashed = true;
+        return false;
+    }
+}
     /**
      * Call client-side initialization
      */
@@ -380,6 +387,37 @@ public class LuaModContainer {
 
         } catch (Exception e) {
             recordError("datagen", "failed to generate data", e);
+            return false;
+        }
+    }
+
+    /**
+     * Call onGenerateAssets at runtime during mod initialization
+     */
+    public boolean generateAssetsAtRuntime() {
+        if (!metadata.hasDatagen()) {
+            return true;
+        }
+
+        if (!loadDatagenScript()) {
+            return false;
+        }
+
+        try {
+            safeExecute(datagenChunk, "datagen script");
+
+            datagenAPI.generatePackMetadata("resources for " + metadata.name);
+
+            LuaValue genFunc = globals.get("onGenerateAssets");
+            if (genFunc.isfunction()) {
+                safeExecute(genFunc, "onGenerateAssets");
+                LOGGER.info("generated assets for mod: {}", metadata.id);
+                return true;
+            }
+            return false;
+
+        } catch (Exception e) {
+            recordError("datagen", "failed to generate assets at runtime", e);
             return false;
         }
     }
@@ -529,10 +567,12 @@ public class LuaModContainer {
     }
 
     /**
-     * Ticks the mod to wake up sleeping threads. Must be called every Minecraft tick.
+     * Ticks the mod to wake up sleeping threads. Must be called every Minecraft
+     * tick.
      */
     public void tick() {
-        if (crashed || state != ModState.running) return;
+        if (crashed || state != ModState.running)
+            return;
 
         List<SleepingThread> currentThreads = new ArrayList<>(sleepingThreads);
         sleepingThreads.clear();

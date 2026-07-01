@@ -6,7 +6,6 @@ import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.Block;
 import net.minecraft.block.entity.BlockEntityType;
 import net.minecraft.component.ComponentType;
-import net.minecraft.component.type.FoodComponent;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.entity.attribute.ClampedEntityAttribute;
 import net.minecraft.entity.attribute.EntityAttribute;
@@ -29,7 +28,6 @@ import net.minecraft.sound.BlockSoundGroup;
 import net.minecraft.sound.SoundEvent;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.Rarity;
 import net.peasoup.language.lua.LuaBridge;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -471,41 +469,39 @@ public class RegistryAPI {
     }
 
     private Item registerItem(String name, LuaValue settingsTable) {
+        // 1. Establish identification keys properly
+        Identifier id = Identifier.of(modId, name);
+        RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, id);
         Item.Settings settings = new Item.Settings();
 
         if (settingsTable.istable()) {
             LuaTable table = settingsTable.checktable();
 
-            // 1. Separate vanilla base settings that aren't data components
+            // 2. Separate vanilla base settings that aren't data components
             settings.maxCount(table.get("max_stack").optint(64));
 
-            // 2. THE DYNAMIC LOOP: Read any key inside a "components" sub-table
+            // 3. THE DYNAMIC LOOP: Read any key inside a "components" sub-table
             LuaValue componentsValue = table.get("components");
             if (componentsValue.istable()) {
                 LuaTable componentsTable = componentsValue.checktable();
                 LuaValue[] keys = componentsTable.keys();
 
                 for (LuaValue luaKey : keys) {
-                    String componentKey = luaKey.tojstring(); // e.g., "minecraft:food" or "minecraft:lore"
+                    String componentKey = luaKey.tojstring();
                     LuaValue luaData = componentsTable.get(luaKey);
 
-                    // 3. Match the text key directly against Minecraft's component registry
                     Identifier componentId = Identifier.of(componentKey);
                     ComponentType<?> componentType = Registries.DATA_COMPONENT_TYPE.get(componentId);
 
                     if (componentType != null && componentType.getCodec() != null) {
                         try {
-                            // 4. Convert the native Lua table data into a generic JSON element structure
                             com.google.gson.JsonElement jsonElement = convertLuaToJson(luaData);
 
-                            // 5. Use Minecraft's native Codec to deserialize the JSON into the true Java
-                            // component object
+                            // Use Minecraft's native Codec to deserialize into the component object
                             Object componentObject = componentType.getCodec()
                                     .parse(JsonOps.INSTANCE, jsonElement)
                                     .getOrThrow(msg -> new RuntimeException("Failed to parse component: " + msg));
 
-                            // 6. Forcefully inject the parsed object straight into the item settings
-                            // builder!
                             injectComponent(settings, componentType, componentObject);
                             LOGGER.info("Successfully bound component data dynamically: {}", componentId);
 
@@ -518,7 +514,16 @@ public class RegistryAPI {
                 }
             }
         }
-        return null;
+
+        // 4. THE REAL FIX: Actually instantiate and register the item object!
+        Item item = new Item(settings);
+        Registry.register(Registries.ITEM, itemKey, item);
+
+        // Save to your cache map so your other API setups can look it up
+        itemCache.put(id.toString(), item);
+        LOGGER.info("Successfully registered item to game registries: {}", id);
+
+        return item; // Return the instantiated object instead of null!
     }
 
     // ==========================================
