@@ -5,6 +5,7 @@ import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
 import net.minecraft.block.AbstractBlock;
 import net.minecraft.block.Block;
 import net.minecraft.block.entity.BlockEntityType;
+import net.minecraft.component.ComponentType;
 import net.minecraft.component.type.FoodComponent;
 import net.minecraft.enchantment.Enchantment;
 import net.minecraft.entity.attribute.ClampedEntityAttribute;
@@ -38,6 +39,8 @@ import org.luaj.vm2.LuaTable;
 import org.luaj.vm2.LuaValue;
 import org.luaj.vm2.lib.OneArgFunction;
 import org.luaj.vm2.lib.TwoArgFunction;
+
+import com.mojang.serialization.JsonOps;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -319,7 +322,8 @@ public class RegistryAPI {
         double min = table.get("min").optdouble(0.0);
         double max = table.get("max").optdouble(1024.0);
 
-        EntityAttribute attribute = new ClampedEntityAttribute("attribute.name." + modId + "." + name, defaultValue, min, max).setTracked(true);
+        EntityAttribute attribute = new ClampedEntityAttribute("attribute.name." + modId + "." + name, defaultValue,
+                min, max).setTracked(true);
 
         Registry.register(Registries.ATTRIBUTE, id, attribute);
         attributeCache.put(id.toString(), attribute);
@@ -365,8 +369,47 @@ public class RegistryAPI {
 
     private void validateName(String name) {
         if (!VALID_NAME.matcher(name).matches()) {
-            throw new LuaError("Invalid registry name: '" + name + "'. Must be lowercase, start with a letter, and contain only letters, numbers, and underscores.");
+            throw new LuaError("Invalid registry name: '" + name
+                    + "'. Must be lowercase, start with a letter, and contain only letters, numbers, and underscores.");
         }
+    }
+
+    // Helper A: Recursively turns standard Lua types/tables into clean JSON
+    // elements
+    private com.google.gson.JsonElement convertLuaToJson(LuaValue value) {
+        if (value.isboolean())
+            return new com.google.gson.JsonPrimitive(value.toboolean());
+        if (value.isint())
+            return new com.google.gson.JsonPrimitive(value.toint());
+        if (value.isnumber())
+            return new com.google.gson.JsonPrimitive(value.todouble());
+        if (value.isstring())
+            return new com.google.gson.JsonPrimitive(value.tojstring());
+
+        if (value.istable()) {
+            LuaTable table = value.checktable();
+            // Check if it's an array layout (sequential numeric keys)
+            if (table.length() > 0) {
+                com.google.gson.JsonArray array = new com.google.gson.JsonArray();
+                for (int i = 1; i <= table.length(); i++) {
+                    array.add(convertLuaToJson(table.get(i)));
+                }
+                return array;
+            } else { // It's a standard dictionary map
+                com.google.gson.JsonObject object = new com.google.gson.JsonObject();
+                for (LuaValue key : table.keys()) {
+                    object.add(key.tojstring(), convertLuaToJson(table.get(key)));
+                }
+                return object;
+            }
+        }
+        return com.google.gson.JsonNull.INSTANCE;
+    }
+
+    // Helper B: Bypasses standard Java generics checking to shove the object home
+    @SuppressWarnings("unchecked")
+    private <T> void injectComponent(Item.Settings settings, ComponentType<T> type, Object value) {
+        settings.component(type, (T) value);
     }
 
     private Identifier registerBlock(String name, LuaValue settingsTable) {
@@ -428,52 +471,54 @@ public class RegistryAPI {
     }
 
     private Item registerItem(String name, LuaValue settingsTable) {
-        Identifier id = Identifier.of(modId, name);
-        RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, id);
         Item.Settings settings = new Item.Settings();
 
         if (settingsTable.istable()) {
             LuaTable table = settingsTable.checktable();
 
+            // 1. Separate vanilla base settings that aren't data components
             settings.maxCount(table.get("max_stack").optint(64));
 
-            if (table.get("durability").isint()) {
-                settings.maxDamage(table.get("durability").toint());
-            }
+            // 2. THE DYNAMIC LOOP: Read any key inside a "components" sub-table
+            LuaValue componentsValue = table.get("components");
+            if (componentsValue.istable()) {
+                LuaTable componentsTable = componentsValue.checktable();
+                LuaValue[] keys = componentsTable.keys();
 
-            String rarityStr = table.get("rarity").optjstring("common").toLowerCase();
-            Rarity rarity = switch (rarityStr) {
-                case "uncommon" -> Rarity.UNCOMMON;
-                case "rare" -> Rarity.RARE;
-                case "epic" -> Rarity.EPIC;
-                default -> Rarity.COMMON;
-            };
-            settings.rarity(rarity);
+                for (LuaValue luaKey : keys) {
+                    String componentKey = luaKey.tojstring(); // e.g., "minecraft:food" or "minecraft:lore"
+                    LuaValue luaData = componentsTable.get(luaKey);
 
-            if (table.get("fire_resistant").optboolean(false)) {
-                settings.fireproof();
-            }
+                    // 3. Match the text key directly against Minecraft's component registry
+                    Identifier componentId = Identifier.of(componentKey);
+                    ComponentType<?> componentType = Registries.DATA_COMPONENT_TYPE.get(componentId);
 
-            LuaValue food = table.get("food");
-            if (food.istable()) {
-                FoodComponent.Builder foodBuilder = new FoodComponent.Builder()
-                        .nutrition(food.get("nutrition").optint(4))
-                        .saturationModifier((float) food.get("saturation").optdouble(0.3));
+                    if (componentType != null && componentType.getCodec() != null) {
+                        try {
+                            // 4. Convert the native Lua table data into a generic JSON element structure
+                            com.google.gson.JsonElement jsonElement = convertLuaToJson(luaData);
 
-                if (food.get("always_edible").optboolean(false)) {
-                    foodBuilder.alwaysEdible();
+                            // 5. Use Minecraft's native Codec to deserialize the JSON into the true Java
+                            // component object
+                            Object componentObject = componentType.getCodec()
+                                    .parse(JsonOps.INSTANCE, jsonElement)
+                                    .getOrThrow(msg -> new RuntimeException("Failed to parse component: " + msg));
+
+                            // 6. Forcefully inject the parsed object straight into the item settings
+                            // builder!
+                            injectComponent(settings, componentType, componentObject);
+                            LOGGER.info("Successfully bound component data dynamically: {}", componentId);
+
+                        } catch (Exception e) {
+                            LOGGER.error("Failed to dynamically bind component '{}': {}", componentKey, e.getMessage());
+                        }
+                    } else {
+                        LOGGER.warn("Skipping component '{}': Not found or lacks a registered codec.", componentKey);
+                    }
                 }
-
-                settings.food(foodBuilder.build());
             }
         }
-
-        Item item = new Item(settings);
-        Registry.register(Registries.ITEM, itemKey, item);
-
-        itemCache.put(id.toString(), item);
-        LOGGER.info("Registered item: {}", id);
-        return item;
+        return null;
     }
 
     // ==========================================
@@ -556,7 +601,8 @@ public class RegistryAPI {
         Item item = itemCache.get(fullId);
 
         if (item == null) {
-            throw new LuaError("Cannot add '" + fullId + "' to group - not registered yet. Register items before adding them to groups.");
+            throw new LuaError("Cannot add '" + fullId
+                    + "' to group - not registered yet. Register items before adding them to groups.");
         }
 
         RegistryKey<ItemGroup> groupKey = switch (groupName.toLowerCase()) {

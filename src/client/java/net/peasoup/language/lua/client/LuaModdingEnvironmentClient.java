@@ -24,7 +24,7 @@ public class LuaModdingEnvironmentClient implements ClientModInitializer {
         LOGGER.info("Initializing Lua Modding Environment Client");
 
         // Register keybind
-        openGuiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.lua_modding.open_gui", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_L,  // Default: L key
+        openGuiKey = KeyBindingHelper.registerKeyBinding(new KeyBinding("key.lua_modding.open_gui", InputUtil.Type.KEYSYM, GLFW.GLFW_KEY_K,  // Default: K key
                 "category.lua_modding"));
 
         ClientTickEvents.END_CLIENT_TICK.register(client -> {

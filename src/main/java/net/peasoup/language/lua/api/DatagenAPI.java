@@ -2,6 +2,11 @@ package net.peasoup.language.lua.api;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.luaj.vm2.*;
@@ -40,7 +45,8 @@ public class DatagenAPI {
         datagen.set("simple_block", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue blockName) {
-                if (!blockName.isstring()) throw new LuaError("Block name must be a string");
+                if (!blockName.isstring())
+                    throw new LuaError("Block name must be a string");
                 generateSimpleBlock(blockName.tojstring());
                 return LuaValue.NIL;
             }
@@ -59,7 +65,8 @@ public class DatagenAPI {
         datagen.set("item_model", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue itemName, LuaValue modelTable) {
-                if (!itemName.isstring()) throw new LuaError("Item name must be a string");
+                if (!itemName.isstring())
+                    throw new LuaError("Item name must be a string");
                 generateItemModel(itemName.tojstring(), modelTable);
                 return LuaValue.NIL;
             }
@@ -69,7 +76,8 @@ public class DatagenAPI {
         datagen.set("recipe", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue recipeName, LuaValue recipeTable) {
-                if (!recipeName.isstring()) throw new LuaError("Recipe name must be a string");
+                if (!recipeName.isstring())
+                    throw new LuaError("Recipe name must be a string");
                 generateRecipe(recipeName.tojstring(), recipeTable);
                 return LuaValue.NIL;
             }
@@ -91,7 +99,8 @@ public class DatagenAPI {
         datagen.set("block_drop", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue blockName, LuaValue dropItem) {
-                if (!blockName.isstring()) throw new LuaError("Block name must be a string");
+                if (!blockName.isstring())
+                    throw new LuaError("Block name must be a string");
                 // If they pass nil for the second argument, it passes null to Java
                 String dropId = dropItem.isnil() ? null : dropItem.tojstring();
                 generateBlockDrop(blockName.tojstring(), dropId);
@@ -102,7 +111,8 @@ public class DatagenAPI {
         datagen.set("mining_level", new ThreeArgFunction() {
             @Override
             public LuaValue call(LuaValue blockName, LuaValue item, LuaValue level) {
-                if (!blockName.isstring()) throw new LuaError("Block name must be a string");
+                if (!blockName.isstring())
+                    throw new LuaError("Block name must be a string");
                 // If they pass nil for the second argument, it passes null to Java
                 String dropId = item.isnil() ? null : item.tojstring();
                 generateMiningTag(blockName.tojstring(), dropId, level.toint());
@@ -149,7 +159,8 @@ public class DatagenAPI {
             Files.writeString(statePath, GSON.toJson(blockState));
 
             // 2. Block Model (assets/modid/models/block/blockName.json)
-            Map<String, Object> blockModel = Map.of("parent", "minecraft:block/cube_all", "textures", Map.of("all", modId + ":block/" + blockName));
+            Map<String, Object> blockModel = Map.of("parent", "minecraft:block/cube_all", "textures",
+                    Map.of("all", modId + ":block/" + blockName));
 
             Path bModelPath = modPath.resolve("assets/" + modId + "/models/block/" + blockName + ".json");
             Files.createDirectories(bModelPath.getParent());
@@ -198,14 +209,51 @@ public class DatagenAPI {
         }
     }
 
-    private void addBlockToTag(Path path, String blockId) throws Exception {
+    private synchronized void addBlockToTag(Path path, String blockId) throws Exception {
         Files.createDirectories(path.getParent());
-        Map<String, Object> tagData = new HashMap<>();
+        JsonObject tagData;
 
-        // In a real scenario, we'd load the existing file and add to the list
-        // For now, we'll create/overwrite for simplicity
-        tagData.put("replace", false);
-        tagData.put("values", java.util.List.of(blockId));
+        if (Files.exists(path)) {
+            try {
+                tagData = JsonParser.parseString(Files.readString(path)).getAsJsonObject();
+            } catch (Exception e) {
+                tagData = new JsonObject();
+            }
+        } else {
+            tagData = new JsonObject();
+        }
+
+        if (!tagData.has("replace")) {
+            tagData.addProperty("replace", false);
+        }
+
+        JsonArray valuesArray;
+        if (tagData.has("values")) {
+            valuesArray = tagData.getAsJsonArray("values");
+        } else {
+            valuesArray = new JsonArray();
+            tagData.add("values", valuesArray);
+        }
+
+        // Check if this optional entry object structure already exists
+        boolean alreadyExists = false;
+        for (JsonElement el : valuesArray) {
+            if (el.isJsonObject()) {
+                JsonObject obj = el.getAsJsonObject();
+                if (obj.has("id") && obj.get("id").getAsString().equals(blockId)) {
+                    alreadyExists = true;
+                    break;
+                }
+            }
+        }
+
+        if (!alreadyExists) {
+            // THE FIX: Structure the tag entry as an object instead of a raw string literal
+            JsonObject optionalEntry = new JsonObject();
+            optionalEntry.addProperty("id", blockId);
+            optionalEntry.addProperty("required", false); // Stops Minecraft from disabling the pack!
+            valuesArray.add(optionalEntry);
+        }
 
         Files.writeString(path, GSON.toJson(tagData));
     }
@@ -233,52 +281,13 @@ public class DatagenAPI {
         }
     }
 
-    private void generateItemModel(String itemName, LuaValue modelTable) {
+    public void generateItemModel(String itemName, LuaValue modelTable) {
         try {
-            Map<String, Object> model = new HashMap<>();
-
-            if (modelTable.istable()) {
-                LuaTable table = modelTable.checktable();
-
-                LuaValue parent = table.get("parent");
-                model.put("parent", parent.isstring() ? parent.tojstring() : "minecraft:item/generated");
-
-                LuaValue textures = table.get("textures");
-                if (textures.istable()) {
-                    Map<String, String> textureMap = new HashMap<>();
-                    LuaTable textureTable = textures.checktable();
-
-                    LuaValue k = LuaValue.NIL;
-                    while (true) {
-                        Varargs n = textureTable.next(k);
-                        if ((k = n.arg1()).isnil()) break;
-                        LuaValue v = n.arg(2);
-                        if (k.isstring() && v.isstring()) {
-                            textureMap.put(k.tojstring(), v.tojstring());
-                        }
-                    }
-
-                    if (textureMap.isEmpty()) {
-                        textureMap.put("layer0", modId + ":item/" + itemName);
-                    }
-                    model.put("textures", textureMap);
-                } else {
-                    Map<String, String> textureMap = new HashMap<>();
-                    textureMap.put("layer0", modId + ":item/" + itemName);
-                    model.put("textures", textureMap);
-                }
-            } else {
-                model.put("parent", "minecraft:item/generated");
-                Map<String, String> textureMap = new HashMap<>();
-                textureMap.put("layer0", modId + ":item/" + itemName);
-                model.put("textures", textureMap);
-            }
-
+            Object nativeModelData = convertLuaToJson(modelTable);
             Path modelPath = modPath.resolve("assets/" + modId + "/models/item/" + itemName + ".json");
-            Files.createDirectories(modelPath.getParent());
-            Files.writeString(modelPath, GSON.toJson(model));
 
-            LOGGER.info("Generated item model: {}", itemName);
+            Files.createDirectories(modelPath.getParent());
+            Files.writeString(modelPath, GSON.toJson(nativeModelData));
         } catch (Exception e) {
             LOGGER.error("Failed to generate item model for {}", itemName, e);
         }
@@ -290,83 +299,97 @@ public class DatagenAPI {
 
     public void generateRecipe(String recipeName, LuaValue recipeTable) {
         try {
-            Object recipe = luaValueToNative(recipeTable);
-            Path recipePath = modPath.resolve("data").resolve(modId).resolve("recipe").resolve(recipeName + ".json");
+            // 1. Convert Lua to Java Maps/Lists using your method
+            Object nativeRecipeData = convertLuaToJson(recipeTable);
+            Path recipePath = modPath.resolve("data/" + modId + "/recipe/" + recipeName + ".json");
 
+            // 2. GSON converts the native Map/List straight to clean JSON string
             Files.createDirectories(recipePath.getParent());
-            Files.writeString(recipePath, GSON.toJson(recipe));
-            LOGGER.info("Generated recipe: {}", recipeName);
+            Files.writeString(recipePath, GSON.toJson(nativeRecipeData));
+            LOGGER.info("Generated dynamic recipe data: {}:{}", modId, recipeName);
         } catch (Exception e) {
-            LOGGER.error("Failed to generate recipe", e);
+            LOGGER.error("Failed to generate recipe for {}", recipeName, e);
         }
     }
 
-    private void generateLangEntry(String langCode, String key, String value) {
+    public synchronized void generateLangEntry(String langCode, String key, String value) {
         try {
             Path langPath = modPath.resolve("assets/" + modId + "/lang/" + langCode + ".json");
             Files.createDirectories(langPath.getParent());
 
-            HashMap<Object, Object> entries = new HashMap<>();
+            JsonObject langData = new JsonObject();
             if (Files.exists(langPath)) {
-                String json = Files.readString(langPath);
-                entries = GSON.fromJson(json, HashMap.class);
+                try {
+                    langData = JsonParser.parseString(Files.readString(langPath)).getAsJsonObject();
+                } catch (Exception ignored) {
+                }
             }
 
-            entries.put(key, value);
-            Files.writeString(langPath, GSON.toJson(entries));
-
-            LOGGER.debug("Added lang entry: {} -> {} ({})", key, value, langCode);
+            langData.addProperty(key, value);
+            Files.writeString(langPath, GSON.toJson(langData));
         } catch (Exception e) {
-            LOGGER.error("Failed to add lang entry", e);
+            LOGGER.error("Failed to append lang entry", e);
         }
     }
 
-    public void generateBlockDrop(String blockName, String dropItemId) {
+    public void generateBlockDrop(String blockName, String dropItem) {
         try {
-            // If no drop item is specified, the block drops itself
-            String finalDrop = dropItemId;
-            if (finalDrop == null || finalDrop.isEmpty()) {
-                finalDrop = modId + ":" + blockName;
-            } else if (!finalDrop.contains(":")) {
-                // If they just typed "cheese_slice", format it to "mymod:cheese_slice"
-                finalDrop = modId + ":" + finalDrop;
-            }
+            Path lootPath = modPath.resolve("data/" + modId + "/loot_table/blocks/" + blockName + ".json");
+            Files.createDirectories(lootPath.getParent());
 
-            // Build the Loot Table JSON Structure
-            Map<String, Object> pool = Map.of("rolls", 1, "entries", java.util.List.of(Map.of("type", "minecraft:item", "name", finalDrop)), "conditions", java.util.List.of(Map.of("condition", "minecraft:survives_explosion")));
+            String finalDrop = (dropItem == null) ? modId + ":" + blockName : dropItem;
 
-            Map<String, Object> root = Map.of("type", "minecraft:block", "pools", java.util.List.of(pool));
+            // Clean raw json injection matching standard Mojang loot tables
+            String rawLootJson = """
+                    {
+                      "type": "minecraft:block",
+                      "pools": [
+                        {
+                          "rolls": 1.0,
+                          "bonus_rolls": 0.0,
+                          "entries": [
+                            {
+                              "type": "minecraft:item",
+                              "name": "%s"
+                            }
+                          ],
+                          "conditions": [
+                            {
+                              "condition": "minecraft:survives_explosion"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    """.formatted(finalDrop);
 
-            // In 1.21.4, the folder must be exactly 'loot_table/blocks'
-            Path path = modPath.resolve("data/" + modId + "/loot_table/blocks/" + blockName + ".json");
-            Files.createDirectories(path.getParent());
-            Files.writeString(path, GSON.toJson(root));
-
-            LOGGER.info("Generated Loot Table for {}: drops {}", blockName, finalDrop);
+            Files.writeString(lootPath, rawLootJson);
         } catch (Exception e) {
-            LOGGER.error("Failed to generate loot table for {}", blockName, e);
+            LOGGER.error("Failed to generate block drop loot table", e);
         }
     }
-
     // ==========================================
     // 6. HELPERS
     // ==========================================
 
-    private Object luaValueToNative(LuaValue v) {
-        if (v.isboolean()) return v.toboolean();
+    private Object convertLuaToJson(LuaValue v) {
+        if (v.isboolean())
+            return v.toboolean();
         if (v.isnumber()) {
             double d = v.todouble();
-            if (d == (int) d) return (int) d;
+            if (d == (int) d)
+                return (int) d;
             return d;
         }
-        if (v.isstring()) return v.tojstring();
+        if (v.isstring())
+            return v.tojstring();
         if (v.istable()) {
             LuaTable table = v.checktable();
 
             if (table.length() > 0) {
                 java.util.List<Object> list = new java.util.ArrayList<>();
                 for (int i = 1; i <= table.length(); i++) {
-                    list.add(luaValueToNative(table.get(i)));
+                    list.add(convertLuaToJson(table.get(i)));
                 }
                 return list;
             }
@@ -375,8 +398,9 @@ public class DatagenAPI {
             LuaValue k = LuaValue.NIL;
             while (true) {
                 Varargs n = table.next(k);
-                if ((k = n.arg1()).isnil()) break;
-                map.put(k.tojstring(), luaValueToNative(n.arg(2)));
+                if ((k = n.arg1()).isnil())
+                    break;
+                map.put(k.tojstring(), convertLuaToJson(n.arg(2)));
             }
             return map;
         }
