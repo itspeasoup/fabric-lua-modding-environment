@@ -1,40 +1,37 @@
 {
 	"schemaVersion": 1,
-	"id": "lua-modding-environment",
+	"id": "luacubed",
 	"version": "${version}",
-	"name": "lua modding environment",
-	"description": "allows lua files to work as mods, just how god intended",
+	"name": "lua³ (LuaCubed)",
+	"description": "lua files now work as mods, deal with it. can work with java mods - now with registry and datagen!",
 	"authors": [
-		"peasoup!!"
+		"peasoup/veggiepeasoup"
 	],
 	"contact": {
 		"homepage": "https://fabricmc.net/",
 		"sources": "https://fabricmc.net/develop/template/"
 	},
 	"license": "CC0-1.0",
-	"icon": "assets.lua-modding-environment/icon.png",
+	"icon": "assets.luacubed/icon.png",
 	"environment": "*",
 	"entrypoints": {
+		"preLaunch": [
+			"net.peasoup.luacubed.LuaCubedDatagen"
+		],
 		"main": [
-			"net.peasoup.language.lua.LuaModdingEnvironment"
+			"net.peasoup.luacubed.LuaCubed"
 		],
 		"client": [
-			"net.peasoup.language.lua.client.LuaModdingEnvironmentClient"
-		],
-		"fabric-datagen": [
-			"net.peasoup.language.lua.LuaModdingEnvironmentDatagen"
+			"net.peasoup.luacubed.client.LuaCubedClient"
 		]
 	},
-	"mixins": [
-		"lua-modding-environment.mixins.json"
-	],
 	"depends": {
 		"fabricloader": ">=0.19.3",
-		"minecraft": "~1.21.1",
+		"minecraft": "~1.21.8",
 		"java": ">=21",
 		"fabric-api": "*"
 	},
-	"suggests": {
-		"another-mod": "*"
-	}
+	"mixins": [
+        "luacubed.mixins.json"
+    ]
 }
