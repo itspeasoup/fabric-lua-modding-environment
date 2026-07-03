@@ -1,7 +1,12 @@
 package net.peasoup.luacubed;
 
+import java.io.IOException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,21 +30,16 @@ import net.peasoup.luacubed.api.EventAPI;
 import net.peasoup.luacubed.api.JavaAPI;
 import net.peasoup.luacubed.api.RegistryAPI;
 
-/**
- * Container for a single Lua mod with its own sandboxed environment
- * Enhanced with better error handling, config support, and security
- */
 public class LuaModContainer {
     private static final Logger LOGGER = LogManager.getLogger("LuaModContainer");
 
     private final LuaModMetadata metadata;
-    private final Path modPath;
+    private Path modPath;
     private final Globals globals;
 
     private final DatagenAPI datagenAPI;
-    // Error tracking
     private final List<ModError> errors = new ArrayList<>();
-    // Loaded script chunks
+
     private LuaValue mainChunk;
     private LuaValue clientChunk;
     private LuaValue datagenChunk;
@@ -50,7 +50,7 @@ public class LuaModContainer {
 
     private static class SleepingThread {
         int ticksRemaining;
-        final LuaThread thread; // This is a LuaJ coroutine
+        final LuaThread thread;
 
         SleepingThread(int ticksRemaining, LuaThread thread) {
             this.ticksRemaining = ticksRemaining;
@@ -58,7 +58,6 @@ public class LuaModContainer {
         }
     }
 
-    // 1. ADDED ACCESSIBLE BOOLEAN FLAG TO TRACK THIS CONTAINER'S PRIVILEGE
     private final boolean sandboxed;
 
     public LuaModContainer(LuaModMetadata metadata, Path modPath, boolean isDownloadedFromRepo) {
@@ -68,24 +67,17 @@ public class LuaModContainer {
     public LuaModContainer(LuaModMetadata metadata, Path modPath, boolean isDownloadedFromRepo, boolean isDatagen) {
         this.metadata = metadata;
         this.modPath = modPath;
-        this.sandboxed = isDownloadedFromRepo; // <-- Cache sandbox mode
+        this.sandboxed = isDownloadedFromRepo;
 
-        // Create standard globals for this mod
         this.globals = JsePlatform.standardGlobals();
 
-        // 2. DYNAMIC SECURITY GATEKEEPING
         if (this.sandboxed) {
-            // Repo mod: Strip file/system access and protect Java Interop
             this.globals.set("io", org.luaj.vm2.LuaValue.NIL);
             this.globals.set("os", org.luaj.vm2.LuaValue.NIL);
-            this.globals.set("luajava", org.luaj.vm2.LuaValue.NIL); // Wipe wide-open reflection
-        } else {
-            // Local folder mod: Keep native io, os, and standard luajava wide open!
-            LOGGER.info("[{}] Loaded from local mods folder. Granted UNRESTRICTED environment permissions.",
-                    metadata.id);
         }
 
-        // Redirect print to logger
+        this.globals.set("luajava", org.luaj.vm2.LuaValue.NIL);
+
         this.globals.set("print", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
@@ -100,7 +92,6 @@ public class LuaModContainer {
             }
         });
 
-        // Threading and waiting API (Your brilliant coroutine handler!)
         globals.set("start_thread", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue func) {
@@ -129,8 +120,7 @@ public class LuaModContainer {
             }
         });
 
-        // Add error handler
-        this.globals.set("error_handler", new VarArgFunction() {
+        this.globals.set("error", new VarArgFunction() {
             @Override
             public Varargs invoke(Varargs args) {
                 String msg = args.arg(1).tojstring();
@@ -140,25 +130,19 @@ public class LuaModContainer {
             }
         });
 
-        // Create API instances
         this.datagenAPI = new DatagenAPI(metadata.id, modPath);
         this.datagenAPI.install(globals);
 
-        // simple datagen check to prevent crashes during prelaunch! (mods are NOT supposed to access minecraft before initialization)
         if (!isDatagen) {
             RegistryAPI registryAPI = new RegistryAPI(metadata.id);
             EventAPI eventAPI = new EventAPI(metadata.id);
             ConfigAPI configAPI = new ConfigAPI(metadata.id, modPath);
 
-            // 3. CASCADE SAFETY REQUIREMENT DOWN TO YOUR REFLECTION ENGINE
-            // If the mod is sandboxed, safety is enabled (true). If it is a local mod,
-            // safety is disabled (false).
             JavaAPI javaAPI = new JavaAPI(this.sandboxed);
             javaAPI.install(globals);
             registryAPI.install(globals);
             eventAPI.install(globals);
 
-            // Force the map to populate for your individual script environments too!
             for (Map.Entry<String, String> entry : LuaGlobalRegistry.getShortcuts().entrySet()) {
                 try {
                     Class<?> clazz = Class.forName(entry.getValue());
@@ -166,8 +150,6 @@ public class LuaModContainer {
                 } catch (ClassNotFoundException ignored) {
                 }
             }
-
-            // -------------------------------------------
 
             if (metadata.hasConfig()) {
                 configAPI.install(globals, metadata.config);
@@ -179,7 +161,6 @@ public class LuaModContainer {
 
         }
 
-        // Add mod metadata
         LuaTable modInfo = new LuaTable();
         modInfo.set("id", metadata.id);
         modInfo.set("name", metadata.name);
@@ -189,7 +170,6 @@ public class LuaModContainer {
         modInfo.set("environment", metadata.environment.toString().toLowerCase());
         globals.set("MOD_INFO", modInfo);
 
-        // Add path utilities
         globals.set("MOD_PATH", modPath.toString());
         globals.set("resolve_path", new VarArgFunction() {
             @Override
@@ -200,12 +180,9 @@ public class LuaModContainer {
         });
     }
 
-    /**
-     * Load the main script
-     */
     public boolean loadMainScript() {
         if (!metadata.isServerSide() && !metadata.isClientSide()) {
-            return true; // No scripts to load
+            return true;
         }
 
         try {
@@ -243,7 +220,7 @@ public class LuaModContainer {
             Path scriptPath = modPath.resolve(metadata.clientScript);
             if (!Files.exists(scriptPath)) {
                 LOGGER.debug("optional client script not found: {}", metadata.clientScript);
-                return true; // Not an error if optional
+                return true;
             }
 
             String script = Files.readString(scriptPath);
@@ -327,13 +304,8 @@ public class LuaModContainer {
         try {
             state = ModState.initializing;
 
-            // Execute the main script
             safeExecute(mainChunk, "main script");
 
-            // REMOVED: generateAssetsAtRuntime() from here!
-            // We want virtual assets completely finished BEFORE this phase.
-
-            // Call onInitialize() if it exists
             LuaValue initFunc = globals.get("onInitialize");
             if (initFunc.isfunction()) {
                 safeExecute(initFunc, "onInitialize");
@@ -353,12 +325,9 @@ public class LuaModContainer {
         }
     }
 
-    /**
-     * Call client-side initialization
-     */
     public boolean callClientInitialize() {
         if (crashed || clientChunk == null) {
-            return true; // Not an error if no client script
+            return true;
         }
 
         try {
@@ -377,16 +346,15 @@ public class LuaModContainer {
         }
     }
 
-    /**
-     * Load the datagen script
-     */
     public boolean loadDatagenScript() {
         if (!metadata.hasDatagen()) {
+            LOGGER.info("{} claims it has no datagen.", metadata.id);
             return true;
         }
 
         try {
             Path scriptPath = modPath.resolve(metadata.datagen.datagenScript);
+            LOGGER.info("[{}] path of datagen script: {}", metadata.id, scriptPath);
             if (!Files.exists(scriptPath)) {
                 recordError("datagen", "datagen script not found: " + metadata.datagen.datagenScript, null);
                 return false;
@@ -416,10 +384,8 @@ public class LuaModContainer {
         }
 
         try {
-            // Execute the datagen script
             safeExecute(datagenChunk, "datagen script");
 
-            // Call onGenerateData() if it exists
             LuaValue genFunc = globals.get("onGenerateData");
             if (genFunc.isfunction()) {
                 safeExecute(genFunc, "onGenerateData");
@@ -434,67 +400,58 @@ public class LuaModContainer {
         }
     }
 
-    /**
-     * Call onGenerateAssets at runtime during mod initialization
-     */
-    public boolean generateAssetsAtRuntime() {
-        if (!metadata.hasDatagen()) {
-            return true;
-        }
-
-        if (!loadDatagenScript()) {
-            return false;
-        }
-
-        try {
-            safeExecute(datagenChunk, "datagen script");
-
-            datagenAPI.generatePackMetadata("resources for " + metadata.name);
-
-            LuaValue genFunc = globals.get("onGenerateAssets");
-            if (genFunc.isfunction()) {
-                safeExecute(genFunc, "onGenerateAssets");
-                LOGGER.info("generated assets for mod: {}", metadata.id);
-                return true;
-            }
-            return false;
-
-        } catch (Exception e) {
-            recordError("datagen", "failed to generate assets at runtime", e);
-            return false;
-        }
-    }
-
-    /**
-     * Generate assets only (called during pre-generation)
-     */
-    public void generateAssetsOnly() {
+    public void generateAssetsOnly(Path tmpModPath) {
         LOGGER.info("pregenerating assets!");
+
         if (!loadDatagenScript()) {
             LOGGER.info("no datagen script!");
             return;
         }
 
-        try {
-            safeExecute(datagenChunk, "datagen script");
+        Path realModPath = this.modPath;
 
+        try {
+            this.modPath = tmpModPath;
+            datagenAPI.setModPath(tmpModPath);
+
+            safeExecute(datagenChunk, "datagen script");
             datagenAPI.generatePackMetadata("resources for " + metadata.name);
 
             LuaValue genFunc = globals.get("onGenerateAssets");
             if (genFunc.isfunction()) {
                 safeExecute(genFunc, "onGenerateAssets");
-                LOGGER.info("pre-generated assets for mod: {}", metadata.id);
             } else {
-                // Fallback to onGenerateData if onGenerateAssets doesn't exist
                 genFunc = globals.get("onGenerateData");
                 if (genFunc.isfunction()) {
                     safeExecute(genFunc, "onGenerateData");
-                    LOGGER.info("pre-generated data for mod: {}", metadata.id);
                 }
+            }
+
+            Path realAssets = realModPath.resolve("assets");
+            Path tmpAssets = tmpModPath.resolve("assets");
+            if (Files.exists(tmpAssets)) {
+                overlayMergeDirectories(tmpAssets, realAssets);
+            }
+
+            Path realData = realModPath.resolve("data");
+            Path tmpData = tmpModPath.resolve("data");
+            if (Files.exists(tmpData)) {
+                overlayMergeDirectories(tmpData, realData);
+            }
+
+            Path realMcmeta = realModPath.resolve("pack.mcmeta");
+            Path tmpMcmeta = tmpModPath.resolve("pack.mcmeta");
+            if (Files.exists(tmpMcmeta)) {
+                Files.deleteIfExists(realMcmeta);
+                Files.move(tmpMcmeta, realMcmeta);
             }
 
         } catch (Exception e) {
             recordError("datagen", "failed to pre-generate assets", e);
+        } finally {
+            this.modPath = realModPath;
+            datagenAPI.setModPath(realModPath);
+            deleteDirectorySilently(tmpModPath);
         }
     }
 
@@ -532,9 +489,9 @@ public class LuaModContainer {
      * Record an error for this mod
      */
     private void recordError(String state, String message, Throwable cause) {
+        LOGGER.error("[{}] {} error: {} - {}", metadata.id, state, message, cause);
         errors.add(new ModError(state, message, cause));
 
-        // Crash the mod if we have too many errors
         if (errors.size() >= 10) {
             crashed = true;
             this.state = ModState.crashed;
@@ -563,7 +520,6 @@ public class LuaModContainer {
         return metadata.hasDatagen();
     }
 
-    // Getters
 
     public Path getModPath() {
         return modPath;
@@ -586,6 +542,7 @@ public class LuaModContainer {
     }
 
     public void disable() {
+        EventAPI.clearHandlersForMod(metadata.id);
         this.state = ModState.disabled;
         LOGGER.info("disabled mod: {}", metadata.id);
     }
@@ -616,10 +573,6 @@ public class LuaModContainer {
         }
     }
 
-    /**
-     * Ticks the mod to wake up sleeping threads. Must be called every Minecraft
-     * tick.
-     */
     public void tick() {
         if (crashed || state != ModState.running)
             return;
@@ -632,7 +585,6 @@ public class LuaModContainer {
 
             if (st.ticksRemaining <= 0) {
                 try {
-                    // Time's up! Wake the Lua script back up exactly where it paused
                     st.thread.resume(LuaValue.NONE);
                 } catch (Exception e) {
                     LOGGER.error("[{}] error resuming lua thread", metadata.id, e);
@@ -640,9 +592,54 @@ public class LuaModContainer {
                             NotificationManager.Type.ERROR, 5000);
                 }
             } else {
-                // Not done waiting, put it back in the queue
                 sleepingThreads.add(st);
             }
         }
+    }
+
+    private static void deleteDirectorySilently(Path path) {
+        if (path == null || !Files.exists(path)) {
+            return;
+        }
+        try {
+            Files.walkFileTree(path, new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.delete(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                    Files.delete(dir);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            LOGGER.warn("failed to silently clean up directory profile: {}", path, e);
+        }
+    }
+
+    private static void overlayMergeDirectories(Path source, Path target) throws IOException {
+        if (!Files.exists(source)) {
+            return;
+        }
+        Files.walkFileTree(source, new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                Path targetDir = target.resolve(source.relativize(dir));
+                if (!Files.exists(targetDir)) {
+                    Files.createDirectories(targetDir);
+                }
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                Path targetFile = target.resolve(source.relativize(file));
+                Files.move(file, targetFile, StandardCopyOption.REPLACE_EXISTING);
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 }

@@ -14,6 +14,8 @@ import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.ClickableWidget;
+import net.minecraft.client.gui.widget.CyclingButtonWidget;
+import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
@@ -43,7 +45,6 @@ public class LuaModConfigScreen extends Screen {
         entries.clear();
 
         try {
-            // Get all config values from Lua
             Globals globals = mod.getGlobals();
             LuaValue configTable = globals.get("config");
 
@@ -78,11 +79,10 @@ public class LuaModConfigScreen extends Screen {
 
             if (value.istable()) {
                 LuaTable t = value.checktable();
-                // detect your custom ui tables
                 if (!t.get("choices").isnil() || !t.get("min").isnil()) {
-                    entries.add(new ConfigEntry(fullKey, value)); // treat as a leaf value
+                    entries.add(new ConfigEntry(fullKey, value));
                 } else {
-                    parseConfigTable(fullKey, t); // standard nested table
+                    parseConfigTable(fullKey, t);
                 }
             } else {
                 entries.add(new ConfigEntry(fullKey, value));
@@ -90,23 +90,19 @@ public class LuaModConfigScreen extends Screen {
         }
     }
 
-    @Override
+        @Override
     protected void init() {
         int y = this.height - 30;
 
-        // Save button
-        this.addDrawableChild(ButtonWidget.builder(Text.literal("💾 Save"), button -> save())
+        this.addDrawableChild(ButtonWidget.builder(Text.literal("save"), button -> save())
                 .dimensions(this.width / 2 - 155, y, 100, 20).build());
 
-        // Cancel button
-        this.addDrawableChild(ButtonWidget.builder(Text.literal("Cancel"), button -> this.close())
+        this.addDrawableChild(ButtonWidget.builder(Text.literal("cancel"), button -> this.close())
                 .dimensions(this.width / 2 - 50, y, 100, 20).build());
 
-        // Reset button
-        this.addDrawableChild(ButtonWidget.builder(Text.literal("🔄 Reset"), button -> reset())
+        this.addDrawableChild(ButtonWidget.builder(Text.literal("reset"), button -> reset())
                 .dimensions(this.width / 2 + 55, y, 100, 20).build());
 
-        // Create text fields for each entry
         int entryY = 50;
         for (ConfigEntry entry : entries) {
             if (entryY > this.height - 70)
@@ -114,7 +110,6 @@ public class LuaModConfigScreen extends Screen {
             int widgetX = this.width / 2 + 10;
 
             if (entry.originalValue.isboolean()) {
-                // toggle button for booleans
                 boolean current = Boolean.parseBoolean(entry.getCurrentValue());
                 ButtonWidget btn = ButtonWidget.builder(Text.literal(current ? "true" : "false"), button -> {
                     boolean next = !button.getMessage().getString().equals("true");
@@ -122,22 +117,77 @@ public class LuaModConfigScreen extends Screen {
                     entry.setModifiedValue(String.valueOf(next));
                     modified = true;
                 }).dimensions(widgetX, entryY, 200, 20).build();
-                entry.widget = btn; // you'll need to change entry.widget type to ClickableWidget
+                entry.widget = btn;
                 this.addDrawableChild(btn);
 
             } else if (entry.originalValue.istable() && !entry.originalValue.get("choices").isnil()) {
-                // cycling choice button (implement using minecraft's
-                // CyclingButtonWidget.builder)
-                // extract the array from entry.originalValue.get("choices") and set up the
-                // builder!
+                java.util.List<String> options = new java.util.ArrayList<>();
+                int length = entry.originalValue.get("choices").length();
+                for (int i = 1; i <= length; i++) {
+                    options.add(entry.originalValue.get("choices").get(i).tojstring());
+                }
+
+                String defaultChoice = options.isEmpty() ? "" : options.get(0);
+                if (!entry.originalValue.get("def").isnil()) {
+                    int defIdx = entry.originalValue.get("def").toint() - 1;
+                    if (defIdx >= 0 && defIdx < options.size()) {
+                        defaultChoice = options.get(defIdx);
+                    }
+                }
+                
+                String currentChoice = entry.getCurrentValue();
+                // Fix: Check if value is missing or evaluates to a raw Lua table string representation
+                if (currentChoice == null || currentChoice.startsWith("table: ")) {
+                    currentChoice = defaultChoice;
+                }
+
+                CyclingButtonWidget<String> cyclingBtn = CyclingButtonWidget.builder(Text::literal)
+                        .values(options)
+                        .initially(currentChoice)
+                        .build(widgetX, entryY, 200, 20, Text.empty(), (button, value) -> {
+                            entry.setModifiedValue(value);
+                            modified = true;
+                        });
+
+                entry.widget = cyclingBtn;
+                this.addDrawableChild(cyclingBtn);
 
             } else if (entry.originalValue.istable() && !entry.originalValue.get("min").isnil()) {
-                // slider widget
-                // extract min/max/def, and extend vanilla SliderWidget here to update
-                // entry.setModifiedValue() on drag
+                double min = entry.originalValue.get("min").todouble();
+                double max = entry.originalValue.get("max").todouble();
+                double def = entry.originalValue.get("def").todouble();
 
+                String currentStr = entry.getCurrentValue();
+                double currentVal = def;
+                
+                // Fix: Only parse if it's a genuine numeric string, avoiding raw table outputs
+                if (currentStr != null && !currentStr.startsWith("table: ")) {
+                    try {
+                        currentVal = Double.parseDouble(currentStr);
+                    } catch (NumberFormatException e) {
+                        currentVal = def;
+                    }
+                }
+
+                SliderWidget slider = new SliderWidget(widgetX, entryY, 200, 20,
+                        Text.literal(String.format("%.2f", currentVal)), (currentVal - min) / (max - min)) {
+                    @Override
+                    protected void updateMessage() {
+                        double actualValue = min + (this.value * (max - min));
+                        this.setMessage(Text.literal(String.format("%.2f", actualValue)));
+                    }
+
+                    @Override
+                    protected void applyValue() {
+                        double actualValue = min + (this.value * (max - min));
+                        entry.setModifiedValue(String.valueOf(actualValue));
+                        modified = true;
+                    }
+                };
+
+                entry.widget = slider;
+                this.addDrawableChild(slider);
             } else {
-                // fallback to standard text field for raw strings/ints/floats
                 TextFieldWidget field = new TextFieldWidget(this.textRenderer, widgetX, entryY, 200, 20,
                         Text.literal(entry.key));
                 field.setMaxLength(100);
@@ -146,25 +196,23 @@ public class LuaModConfigScreen extends Screen {
                     entry.setModifiedValue(text);
                     modified = true;
                 });
-                entry.widget = field; // change ConfigEntry.widget to ClickableWidget to allow polymorphism
+                entry.widget = field;
                 this.addSelectableChild(field);
             }
             entryY += ENTRY_HEIGHT;
         }
     }
-
+    
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        super.render(context, mouseX, mouseY, delta); // Call super first
+        super.render(context, mouseX, mouseY, delta);
 
-        // Title and modified indicator
         context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFFFF);
         if (modified) {
             context.drawTextWithShadow(this.textRenderer, Text.literal("● Modified").formatted(Formatting.YELLOW),
                     this.width / 2 - 150, 25, 0xFFFFAA00);
         }
 
-        // Config entries
         int entryY = 50;
         int index = 0;
 
@@ -177,13 +225,10 @@ public class LuaModConfigScreen extends Screen {
             if (entryY > this.height - 70)
                 break;
 
-            // Background
             context.fill(this.width / 2 - 210, entryY - 2, this.width / 2 + 215, entryY + 23, 0x80202020);
 
-            // Key name
             context.drawTextWithShadow(this.textRenderer, entry.key, this.width / 2 - 200, entryY + 5, 0xFFFFFFFF);
 
-            // Value field (already rendered by widget)
             if (entry.widget != null) {
                 entry.widget.setY(entryY);
                 entry.widget.render(context, mouseX, mouseY, delta);
@@ -193,9 +238,8 @@ public class LuaModConfigScreen extends Screen {
             index++;
         }
 
-        // Scroll hint
         if (entries.size() * ENTRY_HEIGHT > this.height - 120) {
-            context.drawTextWithShadow(this.textRenderer, "↕ Scroll", this.width / 2 + 160, this.height - 50,
+            context.drawTextWithShadow(this.textRenderer, "Scroll", this.width / 2 + 160, this.height - 50,
                     0xFF888888);
         }
     }
@@ -216,7 +260,6 @@ public class LuaModConfigScreen extends Screen {
                 return;
             }
 
-            // Set each modified value
             LuaValue setFunc = configTable.get("set");
             for (ConfigEntry entry : entries) {
                 if (entry.isModified()) {
@@ -225,7 +268,6 @@ public class LuaModConfigScreen extends Screen {
                 }
             }
 
-            // Save to file
             LuaValue saveFunc = configTable.get("save");
             if (saveFunc.isfunction()) {
                 saveFunc.call();
@@ -234,7 +276,7 @@ public class LuaModConfigScreen extends Screen {
             modified = false;
 
             if (client != null && client.player != null) {
-                NotificationManager.show(Text.literal("✓ Config saved"), NotificationManager.Type.INFO, 3000);
+                NotificationManager.show(Text.literal("Config saved"), NotificationManager.Type.INFO, 3000);
             }
 
             this.close();
@@ -258,11 +300,10 @@ public class LuaModConfigScreen extends Screen {
                 }
             }
             modified = true;
-            this.clearAndInit(); // rebuilds the ui with new values
+            this.clearAndInit();
         }
     }
 
-    // add this helper method right below reset()
     private void flattenMap(String prefix, Map<String, Object> map, Map<String, String> flat) {
         for (Map.Entry<String, Object> entry : map.entrySet()) {
             String key = prefix.isEmpty() ? entry.getKey() : prefix + "." + entry.getKey();
@@ -277,7 +318,6 @@ public class LuaModConfigScreen extends Screen {
     }
 
     private LuaValue convertToLua(String text, LuaValue original) {
-        // Try to preserve type
         if (original.isboolean()) {
             return LuaValue.valueOf(Boolean.parseBoolean(text));
         } else if (original.isnumber()) {

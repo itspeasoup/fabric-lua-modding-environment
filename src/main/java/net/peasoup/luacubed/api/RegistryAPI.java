@@ -53,18 +53,12 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.peasoup.luacubed.LuaBridge;
 
-/**
- * Enhanced Lua API for registering game content
- * Supports blocks, items, entities, sounds, particles, and more
- * Fixed for 1.21.1 API changes
- */
 public class RegistryAPI {
     private static final Logger LOGGER = LogManager.getLogger("RegistryAPI");
     private static final Pattern VALID_NAME = Pattern.compile("^[a-z][a-z0-9_]*$");
     private static final Map<String, BlockSoundGroup> SOUND_GROUPS = new HashMap<>();
 
     static {
-        // Initialize sound groups
         for (Field field : BlockSoundGroup.class.getFields()) {
             if (field.getType() == BlockSoundGroup.class && Modifier.isStatic(field.getModifiers())) {
                 try {
@@ -76,7 +70,6 @@ public class RegistryAPI {
     }
 
     private final String modId;
-    // Central storage for everything we've registered
     private final Map<String, Block> blockCache = new HashMap<>();
     private final Map<String, Item> itemCache = new HashMap<>();
     private final Map<String, SoundEvent> soundCache = new HashMap<>();
@@ -86,9 +79,6 @@ public class RegistryAPI {
     private final Map<String, RegistryKey<DamageType>> damageTypeCache = new HashMap<>();
     private final Map<String, EntityAttribute> attributeCache = new HashMap<>();
 
-    // ==========================================
-    // VALIDATION
-    // ==========================================
 
     public RegistryAPI(String modId) {
         this.modId = modId;
@@ -97,7 +87,6 @@ public class RegistryAPI {
     public void install(Globals globals) {
         LuaTable registry = new LuaTable();
 
-        // ===== BLOCKS =====
         registry.set("register_block", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -106,7 +95,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== ITEMS =====
         registry.set("register_item", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -115,7 +103,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== SOUNDS =====
         registry.set("register_sound", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue name) {
@@ -124,7 +111,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== STATUS EFFECTS =====
         registry.set("register_effect", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -133,7 +119,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== PARTICLES =====
         registry.set("register_particle", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue name) {
@@ -142,7 +127,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== ITEM GROUPS =====
         registry.set("add_to_group", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue group) {
@@ -159,7 +143,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== UTILITY =====
         registry.set("is_registered", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue name) {
@@ -177,7 +160,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== ENCHANTMENTS =====
         registry.set("register_enchantment", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -186,7 +168,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== POTIONS =====
         registry.set("register_potion", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -195,7 +176,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== DAMAGE TYPES =====
         registry.set("register_damage_type", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -204,7 +184,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== GAME RULES =====
         registry.set("register_game_rule", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -213,7 +192,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== ATTRIBUTES =====
         registry.set("register_attribute", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -222,7 +200,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== RECIPE TYPES =====
         registry.set("register_recipe_type", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -231,7 +208,6 @@ public class RegistryAPI {
             }
         });
 
-        // ===== BLOCK ENTITIES =====
         registry.set("register_block_entity_type", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue name, LuaValue settings) {
@@ -248,9 +224,6 @@ public class RegistryAPI {
         return null;
     }
 
-    // ==========================================
-    // POTION REGISTRATION
-    // ==========================================
     private Potion registerPotion(String name, LuaValue settingsTable) {
         Identifier id = Identifier.of(modId, name);
 
@@ -282,9 +255,6 @@ public class RegistryAPI {
         return potion;
     }
 
-    // ==========================================
-    // DAMAGE TYPE REGISTRATION
-    // ==========================================
     private Identifier registerDamageType(String name, LuaValue settingsTable) {
         Identifier id = Identifier.of(modId, name);
         RegistryKey<DamageType> key = RegistryKey.of(RegistryKeys.DAMAGE_TYPE, id);
@@ -299,9 +269,6 @@ public class RegistryAPI {
         return id;
     }
 
-    // ==========================================
-    // GAME RULE REGISTRATION
-    // ==========================================
     private String registerGameRule(String name, LuaValue settingsTable) {
         if (!settingsTable.istable()) {
             throw new LuaError("Game rule requires settings table");
@@ -311,9 +278,6 @@ public class RegistryAPI {
         return modId + ":" + name;
     }
 
-    // ==========================================
-    // ATTRIBUTE REGISTRATION
-    // ==========================================
     private EntityAttribute registerAttribute(String name, LuaValue settingsTable) {
         Identifier id = Identifier.of(modId, name);
 
@@ -337,9 +301,6 @@ public class RegistryAPI {
         return attribute;
     }
 
-    // ==========================================
-    // RECIPE TYPE REGISTRATION
-    // ==========================================
     private RecipeType<?> registerRecipeType(String name, LuaValue settingsTable) {
         Identifier id = Identifier.of(modId, name);
 
@@ -356,9 +317,6 @@ public class RegistryAPI {
         return recipeType;
     }
 
-    // ==========================================
-    // BLOCK ENTITY TYPE REGISTRATION
-    // ==========================================
     private BlockEntityType<?> registerBlockEntityType(String name, LuaValue settingsTable) {
         if (!settingsTable.istable()) {
             throw new LuaError("Block entity type requires settings table");
@@ -368,9 +326,6 @@ public class RegistryAPI {
         return null;
     }
 
-    // ==========================================
-    // BLOCK REGISTRATION
-    // ==========================================
 
     private void validateName(String name) {
         if (!VALID_NAME.matcher(name).matches()) {
@@ -379,8 +334,6 @@ public class RegistryAPI {
         }
     }
 
-    // Helper A: Recursively turns standard Lua types/tables into clean JSON
-    // elements
     private com.google.gson.JsonElement convertLuaToJson(LuaValue value) {
         if (value.isboolean())
             return new com.google.gson.JsonPrimitive(value.toboolean());
@@ -393,7 +346,6 @@ public class RegistryAPI {
 
         if (value.istable()) {
             LuaTable table = value.checktable();
-            // Check if it's an array layout (sequential numeric keys)
             if (table.length() > 0) {
                 com.google.gson.JsonArray array = new com.google.gson.JsonArray();
                 for (int i = 1; i <= table.length(); i++) {
@@ -411,7 +363,6 @@ public class RegistryAPI {
         return com.google.gson.JsonNull.INSTANCE;
     }
 
-    // Helper B: Bypasses standard Java generics checking to shove the object home
     @SuppressWarnings("unchecked")
     private <T> void injectComponent(Item.Settings settings, ComponentType<T> type, Object value) {
         settings.component(type, (T) value);
@@ -477,7 +428,6 @@ public class RegistryAPI {
     }
 
     private Item registerItem(String name, LuaValue settingsTable) {
-        // 1. Establish identification keys properly
         Identifier id = Identifier.of(modId, name);
         RegistryKey<Item> itemKey = RegistryKey.of(RegistryKeys.ITEM, id);
 
@@ -486,10 +436,8 @@ public class RegistryAPI {
         if (settingsTable.istable()) {
             LuaTable table = settingsTable.checktable();
 
-            // 2. Separate vanilla base settings that aren't data components
             settings.maxCount(table.get("max_stack").optint(64));
 
-            // 3. THE DYNAMIC LOOP: Read any key inside a "components" sub-table
             LuaValue componentsValue = table.get("components");
             if (componentsValue.istable()) {
                 LuaTable componentsTable = componentsValue.checktable();
@@ -506,7 +454,6 @@ public class RegistryAPI {
                         try {
                             com.google.gson.JsonElement jsonElement = convertLuaToJson(luaData);
 
-                            // Use Minecraft's native Codec to deserialize into the component object
                             Object componentObject = componentType.getCodec()
                                     .parse(JsonOps.INSTANCE, jsonElement)
                                     .getOrThrow(msg -> new RuntimeException("Failed to parse component: " + msg));
@@ -524,20 +471,15 @@ public class RegistryAPI {
             }
         }
 
-        // 4. THE REAL FIX: Actually instantiate and register the item object!
         Item item = new Item(settings);
         Registry.register(Registries.ITEM, itemKey, item);
 
-        // Save to your cache map so your other API setups can look it up
         itemCache.put(id.toString(), item);
         LOGGER.info("Successfully registered item to game registries: {}", id);
 
-        return item; // Return the instantiated object instead of null!
+        return item;
     }
 
-    // ==========================================
-    // SOUND REGISTRATION
-    // ==========================================
 
     private Identifier registerSound(String name) {
         Identifier id = Identifier.of(modId, name);
@@ -550,9 +492,6 @@ public class RegistryAPI {
         return id;
     }
 
-    // ==========================================
-    // STATUS EFFECT REGISTRATION
-    // ==========================================
 
     private StatusEffect registerStatusEffect(String name, LuaValue settingsTable) {
         Identifier id = Identifier.of(modId, name);
@@ -591,9 +530,6 @@ public class RegistryAPI {
         return effect;
     }
 
-    // ==========================================
-    // PARTICLE REGISTRATION
-    // ==========================================
 
     private Identifier registerParticle(String name) {
         Identifier id = Identifier.of(modId, name);
@@ -606,9 +542,6 @@ public class RegistryAPI {
         return id;
     }
 
-    // ==========================================
-    // ITEM GROUP MANAGEMENT
-    // ==========================================
     private final Map<RegistryKey<ItemGroup>, List<Item>> pendingGroupEntries = new HashMap<>();
 
     public void registerGroupEvents() {
@@ -629,7 +562,6 @@ public class RegistryAPI {
 
         RegistryKey<ItemGroup> groupKey;
 
-        // 1. Try to match standard vanilla groups first
         groupKey = switch (groupName.toLowerCase()) {
             case "building" -> ItemGroups.BUILDING_BLOCKS;
             case "natural" -> ItemGroups.NATURAL;
@@ -644,13 +576,11 @@ public class RegistryAPI {
             default -> null; // Not vanilla, check custom registry next
         };
 
-        // 2. If it's not vanilla, assume it's a custom group name
         if (groupKey == null) {
             Identifier customGroupIdent = Identifier.of(modId, groupName.toLowerCase());
             groupKey = RegistryKey.of(Registries.ITEM_GROUP.getKey(), customGroupIdent);
         }
 
-        // Safely add the item to your initialization map
         pendingGroupEntries.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(item);
         LOGGER.info("Queued {} for group {}", fullId, groupName);
     }
@@ -662,17 +592,13 @@ public class RegistryAPI {
         String iconId = table.get("icon").optjstring("minecraft:apple");
         String title = table.get("title").optjstring(name);
 
-        // FIX: Freeze the Identifier instance here so the lambda captures the correct
-        // item
         final Identifier finalIconIdentifier = Identifier.of(iconId);
 
-        // Create a matching RegistryKey for this group
         RegistryKey<ItemGroup> groupKey = RegistryKey.of(Registries.ITEM_GROUP.getKey(), id);
 
         ItemGroup group = FabricItemGroup.builder()
                 .icon(() -> new ItemStack(Registries.ITEM.get(finalIconIdentifier)))
                 .displayName(Text.literal(title))
-                // OPTIONAL: Automatically append your queued Lua items directly on creation
                 .entries((context, entries) -> {
                     List<Item> items = pendingGroupEntries.getOrDefault(groupKey, List.of());
                     items.forEach(entries::add);

@@ -25,18 +25,11 @@ public abstract class ResourcePackManagerMixin {
 
     @Inject(method = "<init>([Lnet/minecraft/resource/ResourcePackProvider;)V", at = @At("RETURN"))
     private void injectLuaProviders(ResourcePackProvider[] providers, CallbackInfo ci) {
-        // Create a NEW mutable HashSet (don't copy the existing one which might be immutable)
+        Set<ResourcePackProvider> customProviders = new HashSet<>(this.providers);
+        customProviders.add(new LuaModPackProvider(ResourceType.CLIENT_RESOURCES));
+        customProviders.add(new LuaModPackProvider(ResourceType.SERVER_DATA));
 
-        // Add all existing providers
-        Set<ResourcePackProvider> mutableProviders = new HashSet<>(this.providers);
-
-        // Add our Lua providers
-        // Since we don't have 'type' passed in anymore, we register for both.
-        // Minecraft will only call the relevant one for the manager instance.
-        mutableProviders.add(new LuaModPackProvider(ResourceType.CLIENT_RESOURCES));
-        mutableProviders.add(new LuaModPackProvider(ResourceType.SERVER_DATA));
-
-        // Set it as a NEW HashSet (not immutable copy!)
-        this.providers = mutableProviders;
+        // locks the set so it behaves exactly like vanilla expects!
+        this.providers = java.util.Collections.unmodifiableSet(customProviders);
     }
 }

@@ -9,11 +9,8 @@ import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
-import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
-import net.fabricmc.fabric.api.resource.ResourcePackActivationType;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
-import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.peasoup.luacubed.LuaCubed;
 import net.peasoup.luacubed.LuaModContainer;
@@ -65,12 +62,6 @@ public class LuaCubedClient implements ClientModInitializer {
                 NotificationRenderer.render(drawContext, NotificationRenderer.Corner.TOP_RIGHT);
             });
         });
-
-        ResourceManagerHelper.registerBuiltinResourcePack(
-                Identifier.of("luacubed", "lua_virtual_assets"),
-                net.fabricmc.loader.api.FabricLoader.getInstance().getModContainer("luacubed").get(),
-                Text.literal("Lua Dynamic Assets"),
-                ResourcePackActivationType.ALWAYS_ENABLED);
 
         LOGGER.info("Lua Modding Environment Client initialized");
     }

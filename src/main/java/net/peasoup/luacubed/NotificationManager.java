@@ -7,9 +7,9 @@ import java.util.List;
 public class NotificationManager {
     
     public enum Type {
-        INFO(0x55FF55), // Green
-        WARN(0xFFAA00), // Gold
-        ERROR(0xFF5555); // Red
+        INFO(0x55FF55),
+        WARN(0xFFAA00),
+        ERROR(0xFF5555);
 
         public final int color;
         Type(int color) { this.color = color; }

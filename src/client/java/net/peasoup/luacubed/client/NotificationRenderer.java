@@ -13,7 +13,7 @@ public class NotificationRenderer {
     private static final int PADDING = 6;
     private static final int LINE_HEIGHT = 9;
     private static final int VERTICAL_TEXT_PADDING = 8;
-    private static final int MAX_WIDTH = 250; // Maximum allowed width for a notification card
+    private static final int MAX_WIDTH = 256;
 
     public enum Corner {
         TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT
@@ -37,29 +37,24 @@ public class NotificationRenderer {
         if (client.currentScreen != null && calledFromHudCallback) {
             return;
         }
-        // -------------------------
 
         int screenWidth = client.getWindow().getScaledWidth();
         int screenHeight = client.getWindow().getScaledHeight();
 
         NotificationManager.activeNotifications.removeIf(Notification::isExpired);
 
-        // Track running Y-coordinate dynamically since box heights change now
         int currentY = (corner == Corner.TOP_LEFT || corner == Corner.TOP_RIGHT) ? PADDING : screenHeight - PADDING;
 
         for (Notification notification : NotificationManager.activeNotifications) {
             long age = System.currentTimeMillis() - notification.startTime;
             long timeLeft = notification.displayDurationMs - age;
-
-            // --- 1. SMOOTH FADE OUT ALPHA CALCULATION ---
-            // Fade out completely over the final 500 milliseconds
             float alphaFactor = 1.0f;
             if (timeLeft < 500) {
                 alphaFactor = Math.max(0.0f, timeLeft / 500f);
             }
 
             int alphaHex = ((int) (alphaFactor * 255)) & 0xFF;
-            int bgAlphaHex = ((int) (alphaFactor * 0xAA)) & 0xFF; // Match old 0xAA baseline transparency
+            int bgAlphaHex = ((int) (alphaFactor * 0xAA)) & 0xFF;
 
             if (alphaHex == 0)
                 continue;
@@ -72,7 +67,6 @@ public class NotificationRenderer {
                 wrappedLines.add(Text.literal(line.getString()));
             }
 
-            // Find the widest individual line to size the background box properly
             int cardContentWidth = 0;
             for (Text line : wrappedLines) {
                 cardContentWidth = Math.max(cardContentWidth, client.textRenderer.getWidth(line));
@@ -80,7 +74,6 @@ public class NotificationRenderer {
             int boxWidth = cardContentWidth + 20;
             int boxHeight = (wrappedLines.size() * LINE_HEIGHT) + VERTICAL_TEXT_PADDING;
 
-            // Slide-in math logic remains identical
             notification.currentXOffset = Math.max(0,
                     notification.currentXOffset - (notification.currentXOffset * 0.15f));
 
@@ -89,28 +82,23 @@ public class NotificationRenderer {
                 case TOP_RIGHT, BOTTOM_RIGHT -> screenWidth - boxWidth - PADDING + (int) notification.currentXOffset;
             };
 
-            // Recalculate working layout height coordinate for bottom stacks
             if (corner == Corner.BOTTOM_LEFT || corner == Corner.BOTTOM_RIGHT) {
                 currentY -= boxHeight;
             }
 
-            // --- 3. DYNAMIC COLOR RENDERING WITH ALPHA ---
             int boxColor = (bgAlphaHex << 24) | 0x000000;
             int accentColor = (alphaHex << 24) | notification.type.color;
             int textColor = (alphaHex << 24) | 0xFFFFFF;
 
-            // Draw Background Box & Accent Bar
             context.fill(x, currentY, x + boxWidth, currentY + boxHeight, boxColor);
             context.fill(x, currentY, x + 3, currentY + boxHeight, accentColor);
 
-            // Draw Wrapped Text Lines
             int textY = currentY + (VERTICAL_TEXT_PADDING / 2);
             for (Text line : wrappedLines) {
                 context.drawTextWithShadow(client.textRenderer, line, x + 8, textY, textColor);
                 textY += LINE_HEIGHT;
             }
 
-            // Set up placement positions for subsequent notifications in the stack
             if (corner == Corner.TOP_LEFT || corner == Corner.TOP_RIGHT) {
                 currentY += boxHeight + 4;
             } else {

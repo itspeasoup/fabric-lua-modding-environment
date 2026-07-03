@@ -16,7 +16,6 @@ import com.mojang.brigadier.context.CommandContext;
 
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 import net.minecraft.server.command.CommandManager;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.text.Text;
@@ -51,25 +50,14 @@ public class LuaCubed implements ModInitializer {
             registerCommandsShared(dispatcher);
         });
 
-        // 1. Thread-safe native registration for Client Assets (textures, models, lang)
-        net.fabricmc.fabric.api.resource.ResourcePackActivationType clientActivation = net.fabricmc.fabric.api.resource.ResourcePackActivationType.ALWAYS_ENABLED;
-
-        // 2. Safely register custom resource pack providers via Fabric Loader API
-        // This ensures a single unified instance handles the profile pipeline safely
-        // Clean alternative: Use Fabric's built-in pack injection
-        ResourceManagerHelper.registerBuiltinResourcePack(
-                net.minecraft.util.Identifier.of("luacubed", "lua_global_assets"),
-                net.fabricmc.loader.api.FabricLoader.getInstance().getModContainer("luacubed").orElseThrow(),
-                clientActivation);
-
         printCompletionLog();
     }
 
     public static void printCompletionLog() {
-        LOGGER.info("===========================================");
-        LOGGER.info("  Lua Modding Environment Initialized");
+        LOGGER.info("========================");
+        LOGGER.info("  LuaCubed initialized");
         LOGGER.info("  Loaded Mods: {}", modLoader.getLoadedMods().size());
-        LOGGER.info("===========================================");
+        LOGGER.info("========================");
     }
 
     private static void setupConsoleEnvironment() {
@@ -94,20 +82,16 @@ public class LuaCubed implements ModInitializer {
         LOGGER.debug("Console environment configured");
     }
 
-    // --- REBUILT AND COMPLETED MULTI-LOADER REGISTRY NODE ---
     public static void registerCommandsShared(CommandDispatcher<ServerCommandSource> dispatcher) {
-        // /lua <code>
         dispatcher.register(CommandManager.literal("lua")
                 .requires(source -> source.hasPermissionLevel(4))
                 .then(CommandManager.argument("code", StringArgumentType.greedyString())
                         .executes(LuaCubed::executeLuaCode)));
 
-        // /luamods
         dispatcher.register(CommandManager.literal("luamods")
                 .requires(source -> source.hasPermissionLevel(0))
                 .executes(LuaCubed::listMods));
 
-        // /luamods reload
         dispatcher.register(CommandManager.literal("luamods")
                 .requires(source -> source.hasPermissionLevel(3))
                 .then(CommandManager.literal("reload")
@@ -115,20 +99,17 @@ public class LuaCubed implements ModInitializer {
                         .then(CommandManager.argument("modid", StringArgumentType.word())
                                 .executes(LuaCubed::reloadSpecificMod))));
 
-        // /luamods info <modid>
         dispatcher.register(CommandManager.literal("luamods")
                 .requires(source -> source.hasPermissionLevel(0))
                 .then(CommandManager.literal("info")
                         .then(CommandManager.argument("modid", StringArgumentType.word())
                                 .executes(LuaCubed::showModInfo))));
 
-        // /luamods diagnostics
         dispatcher.register(CommandManager.literal("luamods")
                 .requires(source -> source.hasPermissionLevel(2))
                 .then(CommandManager.literal("diagnostics")
                         .executes(LuaCubed::showDiagnostics)));
 
-        // /luamods disable <modid>
         dispatcher.register(CommandManager.literal("luamods")
                 .requires(source -> source.hasPermissionLevel(3))
                 .then(CommandManager.literal("disable")

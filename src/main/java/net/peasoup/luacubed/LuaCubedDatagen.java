@@ -13,7 +13,6 @@ public class LuaCubedDatagen implements PreLaunchEntrypoint {
         LOGGER.info("=== luacubed datagen starting! ===");
 
         try {
-            // Fabric Loader provides a reliable way to get the game directory
             Path gameDir = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir();
             Path modsPath = gameDir.resolve("mods");
             

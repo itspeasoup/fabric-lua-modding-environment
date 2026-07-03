@@ -50,7 +50,7 @@ public class LuaDiagnosticsScreen extends Screen {
         if (!modLoader.getLoadErrors().isEmpty()) {
             diagnosticLines.add("§c§lload errors:");
             for (LuaModLoader.LoadError error : modLoader.getLoadErrors()) {
-                diagnosticLines.add("  §c✗ §7[" + error.modId + "/" + error.state + "]");
+                diagnosticLines.add("  §c§7[" + error.modId + "/" + error.state + "]");
                 diagnosticLines.add("    §f" + error.message);
                 if (error.cause != null) {
                     diagnosticLines.add("    §8" + error.cause.getClass().getSimpleName() + ": " + error.cause.getMessage());
@@ -63,7 +63,7 @@ public class LuaDiagnosticsScreen extends Screen {
             diagnosticLines.add("§c§lcrashed mod details:");
             for (LuaModContainer mod : modLoader.getLoadedMods().values()) {
                 if (mod.hasCrashed()) {
-                    diagnosticLines.add("  §c✗ §f" + mod.getMetadata().name + " §7(" + mod.getMetadata().id + ")");
+                    diagnosticLines.add("  §c§f" + mod.getMetadata().name + " §7(" + mod.getMetadata().id + ")");
                     diagnosticLines.add("    §7state: §f" + mod.getState());
                     diagnosticLines.add("    §7errors: §c" + mod.getErrors().size());
 
@@ -78,7 +78,7 @@ public class LuaDiagnosticsScreen extends Screen {
         diagnosticLines.add("§a§lsuccessfully running mods:");
         for (LuaModContainer mod : modLoader.getLoadedMods().values()) {
             if (!mod.hasCrashed() && mod.getState() == LuaModContainer.ModState.running) {
-                diagnosticLines.add("  §a✓ §f" + mod.getMetadata().name + " §7v" + mod.getMetadata().version);
+                diagnosticLines.add("  §a§f" + mod.getMetadata().name + " §7v" + mod.getMetadata().version);
 
                 // Show config/datagen info
                 List<String> features = new ArrayList<>();

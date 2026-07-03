@@ -7,6 +7,10 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import net.minecraft.MinecraftVersion;
+import net.minecraft.resource.ResourceType;
+import net.peasoup.luacubed.resource.LuaModPackProvider;
+
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.luaj.vm2.*;
@@ -19,29 +23,21 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Lua API for generating data (recipes, loot tables, models, etc.)
- */
 public class DatagenAPI {
     private static final Logger LOGGER = LogManager.getLogger("DatagenAPI");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
     private final String modId;
-    private final Path modPath;
+    private Path modPath;
 
     public DatagenAPI(String modId, Path modPath) {
         this.modId = modId;
         this.modPath = modPath;
     }
 
-    // ==========================================
-    // 1. LUA API INSTALLATION
-    // ==========================================
-
     public void install(Globals globals) {
         LuaTable datagen = new LuaTable();
 
-        // datagen.simple_block(block_name)
         datagen.set("simple_block", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue blockName) {
@@ -52,7 +48,6 @@ public class DatagenAPI {
             }
         });
 
-        // datagen.simple_item(item_name)
         datagen.set("simple_item", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue itemName) {
@@ -63,7 +58,6 @@ public class DatagenAPI {
             }
         });
 
-        // datagen.recipe(recipe_name, recipe_table)
         datagen.set("recipe", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue recipeName, LuaValue recipeTable) {
@@ -74,7 +68,6 @@ public class DatagenAPI {
             }
         });
 
-        // datagen.lang(lang_code, key, value)
         datagen.set("lang", new ThreeArgFunction() {
             @Override
             public LuaValue call(LuaValue langCode, LuaValue key, LuaValue value) {
@@ -86,7 +79,6 @@ public class DatagenAPI {
             }
         });
 
-        // datagen.block_drop("block_name", "item_to_drop")
         datagen.set("block_drop", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue blockName, LuaValue dropItem) {
@@ -112,57 +104,62 @@ public class DatagenAPI {
         globals.set("datagen", datagen);
     }
 
-    // ==========================================
-    // 2. PACK METADATA
-    // ==========================================
-
     public void generatePackMetadata(String description) {
+        LOGGER.info("generating pack metadata for mod: {}", modId);
         try {
             Path metaPath = modPath.resolve("pack.mcmeta");
             Map<String, Object> root = new HashMap<>();
             Map<String, Object> pack = new HashMap<>();
 
-            pack.put("pack_format", 64);
+            int packVersionId = MinecraftVersion.create().packVersion(ResourceType.CLIENT_RESOURCES);
+
+            pack.put("pack_format", packVersionId);
             pack.put("description", description);
+
+            pack.put("supported_formats", java.util.List.of(packVersionId, 999));
+
             root.put("pack", pack);
 
             String json = GSON.toJson(root);
 
-            // save straight to the root mod identifier format: "modId/pack.mcmeta"
-            net.peasoup.luacubed.resource.LuaModPackProvider.VIRTUAL_CACHE.put(modId + "/pack.mcmeta", json);
+            LuaModPackProvider.addVirtualFile(ResourceType.CLIENT_RESOURCES, modId, "pack.mcmeta", json);
 
             Files.writeString(metaPath, json);
-            LOGGER.info("Generated pack.mcmeta for mod: {}", modId);
+            LOGGER.info("Generated clean compliant pack.mcmeta for mod: {}", modId);
         } catch (Exception e) {
             LOGGER.error("Failed to generate pack.mcmeta", e);
         }
     }
 
-    // ==========================================
-    // 3. BLOCK GENERATION
-    // ==========================================
-
-public void generateSimpleBlock(String blockName) {
+    public void generateSimpleBlock(String blockName) {
         try {
-            // block model
-            Map<String, Object> blockModel = Map.of("parent", "minecraft:block/cube_all", "textures",
-                    Map.of("all", modId + ":block/" + blockName));
+            // 1. Block Model (assets/fuck/models/block/snowscug.json)
+            Map<String, Object> blockModel = Map.of(
+                "parent", "minecraft:block/cube_all", 
+                "textures", Map.of("all", modId + ":block/" + blockName)
+            );
             saveAsset(modId, "models/block/" + blockName + ".json", GSON.toJson(blockModel), true);
 
-            // blockstate
+            // 2. Blockstate (assets/fuck/blockstates/snowscug.json)
             Map<String, Object> variants = Map.of("", Map.of("model", modId + ":block/" + blockName));
             Map<String, Object> blockState = Map.of("variants", variants);
             saveAsset(modId, "blockstates/" + blockName + ".json", GSON.toJson(blockState), true);
 
-            // item model
+            // 3. Item Model (assets/fuck/models/item/snowscug.json)
             Map<String, Object> itemModel = Map.of("parent", modId + ":block/" + blockName);
             saveAsset(modId, "models/item/" + blockName + ".json", GSON.toJson(itemModel), true);
 
-            // data-driven item definition (REQUIRED for 1.21.4+)
-            Map<String, Object> itemDef = Map.of("model", Map.of("type", "minecraft:model", "model", modId + ":item/" + blockName));
-            saveAsset(modId, "items/" + blockName + ".json", GSON.toJson(itemDef), true);
+            // 4. FIXED: Modern Client Item Definition (assets/fuck/items/snowscug.json)
+            // Points straight to your models/item/ folder structure natively!
+            Map<String, Object> itemDef = Map.of(
+                "model", Map.of(
+                    "type", "minecraft:model", 
+                    "model", modId + ":item/" + blockName // FIXED: Handshake links to models/item/ structure
+                )
+            );
+            saveAsset(modId, "items/" + blockName + ".json", GSON.toJson(itemDef), true); // FIXED: Outputs to plural items/
 
-            // auto loot table
+            // Auto loot table configuration
             generateBlockDrop(blockName, null);
 
             LOGGER.info("Generated BlockState, Models & Item Def for: {}", blockName);
@@ -171,15 +168,23 @@ public void generateSimpleBlock(String blockName) {
         }
     }
 
-    public void generateSimpleItem(String itemName) {
+        public void generateSimpleItem(String itemName) {
         try {
-            Map<String, Object> itemModel = Map.of("parent", "item/generated", "textures",
-                    Map.of("layer0", modId + ":item/" + itemName));
+            // 1. Model Layout (assets/fuck/models/item/cocaine.json)
+            Map<String, Object> itemModel = Map.of(
+                "parent", "item/generated", 
+                "textures", Map.of("layer0", modId + ":item/" + itemName)
+            );
             saveAsset(modId, "models/item/" + itemName + ".json", GSON.toJson(itemModel), true);
 
-            // data-driven item definition (REQUIRED for 1.21.4+)
-            Map<String, Object> itemDef = Map.of("model", Map.of("type", "minecraft:model", "model", modId + ":item/" + itemName));
-            saveAsset(modId, "items/" + itemName + ".json", GSON.toJson(itemDef), true);
+            // 2. FIXED: Modern Client Item Definition (assets/fuck/items/cocaine.json)
+            Map<String, Object> itemDef = Map.of(
+                "model", Map.of(
+                    "type", "minecraft:model", 
+                    "model", modId + ":item/" + itemName // FIXED: Corrected path maps to models/item/
+                )
+            );
+            saveAsset(modId, "items/" + itemName + ".json", GSON.toJson(itemDef), true); // FIXED: Matches your exact plural tree output
 
             LOGGER.info("Generated simple item model and def for: {}", itemName);
         } catch (Exception e) {
@@ -199,11 +204,9 @@ public void generateSimpleBlock(String blockName) {
 
     public void generateMiningTag(String blockName, String tool, int level) {
         try {
-            // 1. Tool type tag (e.g., mineable/pickaxe)
             Path toolTagPath = modPath.resolve("data/minecraft/tags/block/mineable/" + tool + ".json");
             addBlockToTag(toolTagPath, modId + ":" + blockName);
 
-            // 2. Mining level tag (e.g., needs_iron_tool)
             String levelTag = switch (level) {
                 case 1 -> "needs_stone_tool";
                 case 2 -> "needs_iron_tool";
@@ -246,7 +249,6 @@ public void generateSimpleBlock(String blockName) {
             tagData.add("values", valuesArray);
         }
 
-        // Check if this optional entry object structure already exists
         boolean alreadyExists = false;
         for (JsonElement el : valuesArray) {
             if (el.isJsonObject()) {
@@ -319,9 +321,6 @@ public void generateSimpleBlock(String blockName) {
             LOGGER.error("Failed to generate block drop loot table", e);
         }
     }
-    // ==========================================
-    // 6. HELPERS
-    // ==========================================
 
     private Object convertLuaToJson(LuaValue v) {
         if (v.isboolean())
@@ -359,19 +358,15 @@ public void generateSimpleBlock(String blockName) {
     }
 
     private void saveAsset(String namespace, String path, String json, boolean isClient) {
-        // 1. write directly to memory cache (INSTANT, bypasses file locks & races!)
         try {
             net.minecraft.resource.ResourceType type = isClient ? net.minecraft.resource.ResourceType.CLIENT_RESOURCES
                     : net.minecraft.resource.ResourceType.SERVER_DATA;
 
-            // formats internal path like: "fuck/models/block/guidite_ore.json"
-            net.peasoup.luacubed.resource.LuaModPackProvider.addVirtualFile(modId, type, namespace + "/" + path,
-                    json);
+            LuaModPackProvider.addVirtualFile(type, namespace, path, json);
         } catch (Throwable t) {
             LOGGER.error("Failed to add to virtual cache", t);
         }
 
-        // 2. write to physical disk (for debugging / datapack extraction)
         try {
             String dirKey = isClient ? "assets" : "data";
             Path fullPath = modPath.resolve(dirKey + "/" + namespace + "/" + path);
@@ -381,4 +376,9 @@ public void generateSimpleBlock(String blockName) {
             LOGGER.error("Failed to write {} to disk", path, e);
         }
     }
+
+    public void setModPath(Path newPath) {
+        this.modPath = newPath;
+    }
+
 }

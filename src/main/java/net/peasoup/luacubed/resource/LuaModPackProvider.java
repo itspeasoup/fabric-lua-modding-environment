@@ -1,145 +1,148 @@
 package net.peasoup.luacubed.resource;
 
-import net.minecraft.resource.*;
-import net.minecraft.text.Text;
-import net.minecraft.util.Identifier;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
-import java.util.Map;
 
-/**
- * Resource pack provider that loads generated assets from Lua mods
- */
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import net.minecraft.resource.AbstractFileResourcePack;
+import net.minecraft.resource.InputSupplier;
+import net.minecraft.resource.ResourcePack;
+import net.minecraft.resource.ResourcePackInfo;
+import net.minecraft.resource.ResourcePackPosition;
+import net.minecraft.resource.ResourcePackProfile;
+import net.minecraft.resource.ResourcePackProvider;
+import net.minecraft.resource.ResourcePackSource;
+import net.minecraft.resource.ResourceType;
+import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
+
 public class LuaModPackProvider implements ResourcePackProvider {
     private static final Logger LOGGER = LogManager.getLogger("LuaModPackProvider");
     private final ResourceType type;
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (!(o instanceof LuaModPackProvider other))
+            return false;
+        return this.type == other.type;
+    }
+
+    @Override
+    public int hashCode() {
+        return type.hashCode();
+    }
 
     public LuaModPackProvider(ResourceType type) {
         this.type = type;
     }
 
-    // Put this right inside your LuaModPackProvider class scope!
-    public static final Map<String, String> VIRTUAL_CACHE = new ConcurrentHashMap<>();
+    public static final Map<ResourceType, Map<String, Map<Identifier, byte[]>>> VIRTUAL_CACHE = new ConcurrentHashMap<>();
 
-    /**
-     * Global utility to store dynamic JSON maps across threads.
-     * Example key structure: "fuck/data/recipe/my_recipe.json"
-     */
-    public static void addVirtualFile(String modId, ResourceType type, String subPath, String jsonString) {
-        String dirKey = (type == ResourceType.CLIENT_RESOURCES) ? "assets" : "data";
-        String internalKey = modId + "/" + dirKey + "/" + subPath;
-        VIRTUAL_CACHE.put(internalKey, jsonString);
+    public static void addVirtualFile(ResourceType type, String namespace, String path, String jsonString) {
+        VIRTUAL_CACHE
+                .computeIfAbsent(type, t -> new ConcurrentHashMap<>())
+                .computeIfAbsent(namespace, n -> new ConcurrentHashMap<>())
+                .put(Identifier.of(namespace, path), jsonString.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @Override
     public void register(Consumer<ResourcePackProfile> profileAdder) {
-        Path modsPath = Paths.get("mods");
-        if (!Files.exists(modsPath))
+        Path modsPath = net.fabricmc.loader.api.FabricLoader.getInstance().getGameDir().resolve("mods");
+        if (!Files.exists(modsPath)) {
             return;
+        }
 
         try (Stream<Path> paths = Files.list(modsPath)) {
             paths.filter(Files::isDirectory).forEach(modPath -> {
-                String modId = modPath.getFileName().toString();
-                boolean isConsole = modId.equals("lua_console");
-                if (!isConsole && !Files.exists(modPath.resolve("lua_mod.json")))
+                Path metadataPath = modPath.resolve("lua_mod.json");
+                if (!Files.exists(metadataPath)) {
                     return;
+                }
 
                 try {
-                    ResourcePackInfo resourcePackInfo = new ResourcePackInfo(
-                            "lua_mod_" + modId,
-                            Text.literal("Lua Mod: " + modId),
-                            ResourcePackSource.BUILTIN,
-                            Optional.empty());
+                    if (hasResources(modPath)) {
+                        String modId = modPath.getFileName().toString();
 
-                    // FIX FOR 1.21.8: Use a profile positioning block that enforces default
-                    // enablement!
-                    ResourcePackPosition position = new ResourcePackPosition(
-                            true, // fixedPosition (always loaded)
-                            ResourcePackProfile.InsertionPosition.TOP, // put it on top of vanilla
-                            true // required / always enabled by default!
-                    );
+                        final Path finalModPath = modPath;
+                        final ResourceType finalType = type;
 
-                    ResourcePackProfile profile = ResourcePackProfile.create(
-                            resourcePackInfo,
-                            new ResourcePackProfile.PackFactory() {
-                                @Override
-                                public ResourcePack open(ResourcePackInfo info) {
-                                    return new LuaModResourcePack(modPath, type, info);
-                                }
+                        ResourcePackInfo resourcePackInfo = new ResourcePackInfo(
+                                "lua_mod_" + modId + "_" + type.name().toLowerCase(),
+                                Text.literal("lua mod: " + modId),
+                                ResourcePackSource.BUILTIN,
+                                Optional.empty());
 
-                                @Override
-                                public ResourcePack openWithOverlays(ResourcePackInfo info,
-                                        ResourcePackProfile.Metadata metadata) {
-                                    return open(info);
-                                }
-                            },
-                            type,
-                            position);
+                        ResourcePackProfile profile = ResourcePackProfile.create(resourcePackInfo,
+                                new ResourcePackProfile.PackFactory() {
+                                    @Override
+                                    public ResourcePack open(ResourcePackInfo info) {
+                                        return new LuaModResourcePack(finalModPath, finalType, info);
+                                    }
 
-                    if (profile != null) {
-                        profileAdder.accept(profile);
-                        LOGGER.info("Successfully forced active virtual pack for mod: {}", modId);
+                                    @Override
+                                    public ResourcePack openWithOverlays(ResourcePackInfo info,
+                                            ResourcePackProfile.Metadata metadata) {
+                                        return open(info);
+                                    }
+                                }, type,
+                                new ResourcePackPosition(true, ResourcePackProfile.InsertionPosition.TOP, false));
+
+                        if (profile != null) {
+                            profileAdder.accept(profile);
+                            LOGGER.debug("registered resource pack for mod: {} (type: {})", modId, type);
+                        }
                     }
                 } catch (Exception e) {
-                    LOGGER.error("Failed to register pack profile", e);
+                    LOGGER.error("failed to register resource pack for {}", modPath, e);
                 }
             });
         } catch (Exception e) {
-            LOGGER.error("Failed to scan mods directory", e);
+            LOGGER.error("failed to scan mods directory for resources", e);
         }
     }
 
-    /**
-     * Actual resource pack implementation
-     */
-    /**
-     * Actual resource pack implementation that blends physical files with Lua
-     * virtual files.
-     */
+    private boolean hasResources(Path modPath) {
+        if (type == ResourceType.CLIENT_RESOURCES) {
+            return Files.exists(modPath.resolve("assets"));
+        } else {
+            return Files.exists(modPath.resolve("data"));
+        }
+    }
+
     private static class LuaModResourcePack extends AbstractFileResourcePack {
         private final Path modPath;
         private final ResourceType type;
-        private final Set<String> namespaces;
 
         public LuaModResourcePack(Path modPath, ResourceType type, ResourcePackInfo info) {
             super(info);
             this.modPath = modPath;
             this.type = type;
-            this.namespaces = discoverNamespaces();
         }
 
-        /**
-         * Discover all namespaces this pack contains (both on disk and virtual from
-         * Lua).
-         */
-        /**
-         * Dynamically return namespaces so that files added via Lua *after* boot-up
-         * are recognized immediately without requiring a full pack reconstruction.
-         */
         @Override
         public Set<String> getNamespaces(ResourceType type) {
-            if (type != this.type) {
+            Set<String> ns = (type == this.type) ? discoverNamespaces() : Set.of();
+            LOGGER.debug("called getNamespaces({}) (this.type = {}){}", type, this.type, ns.isEmpty() ? "" : " namespace " + ns);
+            if (type != this.type)
                 return Set.of();
-            }
-            // Re-run discovery dynamically to catch newly generated Lua namespaces
-            return discoverNamespaces();
+            return ns;
         }
 
         private Set<String> discoverNamespaces() {
             Set<String> result = new HashSet<>();
 
-            // 1. Read namespaces from physical disk paths
             Path basePath = type == ResourceType.CLIENT_RESOURCES ? modPath.resolve("assets") : modPath.resolve("data");
             if (Files.exists(basePath)) {
                 try (Stream<Path> paths = Files.list(basePath)) {
@@ -149,72 +152,49 @@ public class LuaModPackProvider implements ResourcePackProvider {
                 }
             }
 
-            // 2. ALWAYS force the mod's own folder name/id as a recognized namespace
-            String modId = modPath.getFileName().toString();
-            result.add(modId);
-
-            // 3. Read virtual namespaces safely from cache
-            String dirKey = (type == ResourceType.CLIENT_RESOURCES) ? "/assets/" : "/data/";
-            for (String key : VIRTUAL_CACHE.keySet()) {
-                if (key.contains(dirKey)) {
-                    int dirIndex = key.indexOf(dirKey);
-                    String subPath = key.substring(dirIndex + dirKey.length());
-
-                    int slashIndex = subPath.indexOf('/');
-                    if (slashIndex > 0) {
-                        String dynamicNamespace = subPath.substring(0, slashIndex);
-                        result.add(dynamicNamespace);
-                    }
-                }
+            Map<String, Map<Identifier, byte[]>> typeCache = VIRTUAL_CACHE.get(this.type);
+            if (typeCache != null) {
+                result.addAll(typeCache.keySet());
             }
 
+            LOGGER.debug("discoverNamespaces() => {}", result);
             return result;
         }
 
         @Override
         public InputSupplier<InputStream> openRoot(String... segments) {
-            String filename = String.join("/", segments);
-            String modId = modPath.getFileName().toString();
-
-            // checks the root namespace directly for pack.mcmeta layout
-            String expectedCacheKey = modId + "/" + filename;
-            if (VIRTUAL_CACHE.containsKey(expectedCacheKey)) {
-                String jsonContent = VIRTUAL_CACHE.get(expectedCacheKey);
-                return () -> new java.io.ByteArrayInputStream(
-                        jsonContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            }
-
             Path path = modPath;
             for (String segment : segments) {
                 path = path.resolve(segment);
             }
 
-            if (!Files.exists(path) || !Files.isRegularFile(path)) {
+            final Path finalPath = path;
+            if (!Files.exists(finalPath) || !Files.isRegularFile(finalPath)) {
                 return null;
             }
 
-            final Path finalPath = path;
             return () -> Files.newInputStream(finalPath);
         }
 
         @Override
         public InputSupplier<InputStream> open(ResourceType type, Identifier id) {
             if (type != this.type) {
+                LOGGER.debug("type mismatch: {} is inequal to {}.", type, this.type);
                 return null;
+            } else {
             }
 
-            // 1. Look inside the virtual memory cache first
             String modId = modPath.getFileName().toString();
             String dirKey = (type == ResourceType.CLIENT_RESOURCES) ? "assets" : "data";
-            String expectedCacheKey = modId + "/" + dirKey + "/" + id.getNamespace() + "/" + id.getPath();
 
-            if (VIRTUAL_CACHE.containsKey(expectedCacheKey)) {
-                String jsonContent = VIRTUAL_CACHE.get(expectedCacheKey);
-                return () -> new java.io.ByteArrayInputStream(
-                        jsonContent.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            Map<String, Map<Identifier, byte[]>> typeCache = VIRTUAL_CACHE.get(type);
+            if (typeCache != null && typeCache.containsKey(id.getNamespace())) {
+                byte[] content = typeCache.get(id.getNamespace()).get(id);
+                if (content != null) {
+                    return () -> new java.io.ByteArrayInputStream(content);
+                }
             }
 
-            // 2. Fallback to physical disk lookup
             Path basePath = type == ResourceType.CLIENT_RESOURCES ? modPath.resolve("assets") : modPath.resolve("data");
             Path resourcePath = basePath.resolve(id.getNamespace()).resolve(id.getPath());
 
@@ -227,11 +207,11 @@ public class LuaModPackProvider implements ResourcePackProvider {
 
         @Override
         public void findResources(ResourceType type, String namespace, String prefix, ResultConsumer consumer) {
-            if (type != this.type || !namespaces.contains(namespace)) {
+            LOGGER.debug("findResources entry: type={} namespace={} prefix={} thisType={}", type, namespace, prefix, this.type);
+            if (type != this.type || !discoverNamespaces().contains(namespace)) {
                 return;
             }
 
-            // 1. Scan and consumer normal disk files
             Path basePath = type == ResourceType.CLIENT_RESOURCES ? modPath.resolve("assets") : modPath.resolve("data");
             Path searchPath = basePath.resolve(namespace).resolve(prefix);
 
@@ -250,28 +230,25 @@ public class LuaModPackProvider implements ResourcePackProvider {
                 }
             }
 
-            // 2. Scan and consume active virtual assets inside VIRTUAL_CACHE
-            String modId = modPath.getFileName().toString();
-            String dirKey = (type == ResourceType.CLIENT_RESOURCES) ? "assets" : "data";
-            String cachePrefixFilter = modId + "/" + dirKey + "/" + namespace + "/" + prefix + "/";
-
-            for (Map.Entry<String, String> entry : VIRTUAL_CACHE.entrySet()) {
-                String cacheKey = entry.getKey();
-                if (cacheKey.startsWith(cachePrefixFilter)) {
-                    // Strips down key string to the expected internal ID format
-                    String internalPath = cacheKey.substring((modId + "/" + dirKey + "/" + namespace + "/").length());
-                    Identifier virtualId = Identifier.of(namespace, internalPath);
-
-                    String jsonContent = entry.getValue();
-                    consumer.accept(virtualId, () -> new java.io.ByteArrayInputStream(
-                            jsonContent.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            Map<String, Map<Identifier, byte[]>> typeMap = VIRTUAL_CACHE.get(type);
+            if (typeMap != null && typeMap.containsKey(namespace)) {
+                LOGGER.debug("findResources: namespace {} has {} virtual entries: {}", namespace,
+                        typeMap.get(namespace).size(), typeMap.get(namespace).keySet());
+                for (Map.Entry<Identifier, byte[]> entry : typeMap.get(namespace).entrySet()) {
+                    Identifier id = entry.getKey();
+                    if (id.getPath().startsWith(prefix + "/")) {
+                        LOGGER.debug("findResources: reporting {} to consumer", id);
+                        consumer.accept(id, () -> new java.io.ByteArrayInputStream(entry.getValue()));
+                    }
                 }
+            } else {
+                LOGGER.debug("findResources: no virtual entries for namespace {} (typeMap null: {})", namespace,
+                        typeMap == null);
             }
         }
 
         @Override
         public void close() {
-            // Memory layout handles cleanup automatically
         }
     }
 }

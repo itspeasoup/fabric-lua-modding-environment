@@ -21,10 +21,6 @@ import com.google.gson.GsonBuilder;
 
 import net.peasoup.luacubed.LuaModMetadata;
 
-/**
- * Lua API for mod configuration
- * Allows mods to have user-configurable settings
- */
 public class ConfigAPI {
     private static final Logger LOGGER = LogManager.getLogger("ConfigAPI");
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
@@ -37,11 +33,7 @@ public class ConfigAPI {
         this.modId = modId;
     }
 
-    /**
-     * Install the config API into Lua globals
-     */
     public void install(Globals globals, LuaModMetadata.ConfigSpec configSpec) {
-        // Determine config file location
         Path configDir = Paths.get("config").resolve("lua_mods");
         if (configSpec.path != null && !configSpec.path.isEmpty()) {
             configDir = Paths.get(configSpec.path);
@@ -49,12 +41,10 @@ public class ConfigAPI {
 
         this.configFile = configDir.resolve(modId + ".json");
 
-        // Load existing config or create with defaults
         loadConfig(configSpec.defaultConfig);
 
         LuaTable configTable = new LuaTable();
 
-        // config.get(key, default_value)
         configTable.set("get", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue key, LuaValue defaultValue) {
@@ -71,7 +61,6 @@ public class ConfigAPI {
             }
         });
 
-        // config.set(key, value)
         configTable.set("set", new TwoArgFunction() {
             @Override
             public LuaValue call(LuaValue key, LuaValue value) {
@@ -84,7 +73,6 @@ public class ConfigAPI {
             }
         });
 
-        // config.save()
         configTable.set("save", new org.luaj.vm2.lib.ZeroArgFunction() {
             @Override
             public LuaValue call() {
@@ -93,7 +81,6 @@ public class ConfigAPI {
             }
         });
 
-        // config.reload()
         configTable.set("reload", new org.luaj.vm2.lib.ZeroArgFunction() {
             @Override
             public LuaValue call() {
@@ -102,7 +89,6 @@ public class ConfigAPI {
             }
         });
 
-        // config.has(key)
         configTable.set("has", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue key) {
@@ -113,7 +99,6 @@ public class ConfigAPI {
             }
         });
 
-        // config.delete(key)
         configTable.set("delete", new OneArgFunction() {
             @Override
             public LuaValue call(LuaValue key) {
@@ -125,7 +110,6 @@ public class ConfigAPI {
             }
         });
 
-        // config.get_all()
         configTable.set("get_all", new org.luaj.vm2.lib.ZeroArgFunction() {
             @Override
             public LuaValue call() {
@@ -138,24 +122,18 @@ public class ConfigAPI {
         LOGGER.info("Installed config API for mod: {}", modId);
     }
 
-    /**
-     * Load config from file, merging with defaults
-     */
     private void loadConfig(Map<String, Object> defaults) {
-        // Start with defaults
         config.clear();
         if (defaults != null) {
             config.putAll(defaults);
         }
 
-        // Try to load from file
         if (Files.exists(configFile)) {
             try {
                 String json = Files.readString(configFile);
                 @SuppressWarnings("unchecked") Map<String, Object> loaded = GSON.fromJson(json, Map.class);
 
                 if (loaded != null) {
-                    // Merge loaded config with defaults (loaded values override defaults)
                     config.putAll(loaded);
                     LOGGER.info("Loaded config for mod: {}", modId);
                 }
@@ -163,15 +141,11 @@ public class ConfigAPI {
                 LOGGER.error("Failed to load config for mod {}, using defaults", modId, e);
             }
         } else {
-            // Create config file with defaults
             saveConfig();
             LOGGER.info("Created default config for mod: {}", modId);
         }
     }
 
-    /**
-     * Save current config to file
-     */
     private void saveConfig() {
         try {
             Files.createDirectories(configFile.getParent());
@@ -183,9 +157,6 @@ public class ConfigAPI {
         }
     }
 
-    /**
-     * Reload config from file
-     */
     private void reloadConfig() {
         if (Files.exists(configFile)) {
             try {
@@ -203,9 +174,6 @@ public class ConfigAPI {
         }
     }
 
-    /**
-     * Get a config value by key (supports nested keys with dot notation)
-     */
     private Object getConfigValue(String key) {
         String[] parts = key.split("\\.");
         Object current = config;
@@ -225,9 +193,6 @@ public class ConfigAPI {
         return current;
     }
 
-    /**
-     * Set a config value by key (supports nested keys with dot notation)
-     */
     private void setConfigValue(String key, Object value) {
         String[] parts = key.split("\\.");
 
@@ -254,16 +219,10 @@ public class ConfigAPI {
         }
     }
 
-    /**
-     * Check if a config key exists
-     */
     private boolean hasConfigKey(String key) {
         return getConfigValue(key) != null;
     }
 
-    /**
-     * Delete a config key
-     */
     private void deleteConfigKey(String key) {
         String[] parts = key.split("\\.");
 
@@ -277,7 +236,7 @@ public class ConfigAPI {
                 Object next = current.get(part);
 
                 if (!(next instanceof Map)) {
-                    return; // Key doesn't exist
+                    return;
                 }
 
                 @SuppressWarnings("unchecked") Map<String, Object> nextMap = (Map<String, Object>) next;
@@ -288,9 +247,6 @@ public class ConfigAPI {
         }
     }
 
-    /**
-     * Convert Java object to Lua value
-     */
     private LuaValue javaToLua(Object obj) {
         if (obj == null) {
             return LuaValue.NIL;
@@ -323,9 +279,6 @@ public class ConfigAPI {
         return LuaValue.NIL;
     }
 
-    /**
-     * Convert Lua value to Java object
-     */
     private Object luaToJava(LuaValue value) {
         if (value.isnil()) {
             return null;
@@ -342,16 +295,13 @@ public class ConfigAPI {
         } else if (value.istable()) {
             LuaTable table = value.checktable();
 
-            // Check if it's an array or a map
             if (table.length() > 0) {
-                // It's an array
                 java.util.List<Object> list = new java.util.ArrayList<>();
                 for (int i = 1; i <= table.length(); i++) {
                     list.add(luaToJava(table.get(i)));
                 }
                 return list;
             } else {
-                // It's a map
                 Map<String, Object> map = new HashMap<>();
                 LuaValue key = LuaValue.NIL;
 
