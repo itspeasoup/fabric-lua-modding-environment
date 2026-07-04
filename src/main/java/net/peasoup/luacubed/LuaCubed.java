@@ -37,6 +37,7 @@ public class LuaCubed implements ModInitializer {
     @Override
     public void onInitialize() {
         LOGGER.info("Initializing Lua Modding Environment");
+        LuaCubedDatagen.generate();
 
         EventAPI.registerKnownEvents();
 

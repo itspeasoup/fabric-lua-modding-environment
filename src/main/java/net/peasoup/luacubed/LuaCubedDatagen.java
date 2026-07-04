@@ -1,15 +1,13 @@
 package net.peasoup.luacubed;
 
-import net.fabricmc.loader.api.entrypoint.PreLaunchEntrypoint;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import java.nio.file.Path;
 
-public class LuaCubedDatagen implements PreLaunchEntrypoint {
+public class LuaCubedDatagen {
     private static final Logger LOGGER = LogManager.getLogger("LuaCubed-PreLaunch");
 
-    @Override
-    public void onPreLaunch() {
+    public static void generate() {
         LOGGER.info("=== luacubed datagen starting! ===");
 
         try {

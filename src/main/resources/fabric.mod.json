@@ -15,9 +15,6 @@
 	"icon": "assets.luacubed/icon.png",
 	"environment": "*",
 	"entrypoints": {
-		"preLaunch": [
-			"net.peasoup.luacubed.LuaCubedDatagen"
-		],
 		"main": [
 			"net.peasoup.luacubed.LuaCubed"
 		],

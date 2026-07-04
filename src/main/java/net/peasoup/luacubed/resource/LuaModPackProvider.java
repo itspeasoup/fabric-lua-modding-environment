@@ -184,9 +184,6 @@ public class LuaModPackProvider implements ResourcePackProvider {
             } else {
             }
 
-            String modId = modPath.getFileName().toString();
-            String dirKey = (type == ResourceType.CLIENT_RESOURCES) ? "assets" : "data";
-
             Map<String, Map<Identifier, byte[]>> typeCache = VIRTUAL_CACHE.get(type);
             if (typeCache != null && typeCache.containsKey(id.getNamespace())) {
                 byte[] content = typeCache.get(id.getNamespace()).get(id);
